@@ -6,7 +6,7 @@ on:
     branches:
       - readme
     paths:
-      - .github/workflows/ci.yml
+      - .github/workflows/one.yml
 
 env:
   SCRIPT_REPO: ${{ github.repository }}
@@ -191,12 +191,13 @@ jobs:
         BRANCH:
           - current
         RELEASE:
-          # - focal # Ubuntu 20.04 LTS
+          # - focal # Ubuntu 20.04 LTS (已移除)
           - jammy # Ubuntu 22.04 LTS
           - noble # Ubuntu 24.04 LTS
-          - plucky # Ubuntu 25.04
+          # - oracular # Ubuntu 24.10(已移除)
+          # - plucky # Ubuntu 25.04(已移除)
           # - buster # Debian 10 (已移除)
-          # - bullseye # Debian 11
+          # - bullseye # Debian 11 (已移除)
           - bookworm # Debian 12
           - trixie # Debian 13
           # - sid # Debian unstable (已移除)
