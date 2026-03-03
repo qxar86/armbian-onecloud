@@ -54,7 +54,8 @@ jobs:
         with:
           tag_name: ${{ steps.get.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: CI ${{ steps.get.outputs.tag }}
+          # 修正此处：删掉多余的 CI 前缀，直接使用 tag
+          name: ${{ steps.get.outputs.tag }}
           body: |
             ## 构建说明
             - 包含线刷包 (Burn Package) 和普通镜像 (Standard Image)
@@ -81,13 +82,23 @@ jobs:
           repository: ${{ env.ARMBIAN_REPO }}
           ref: ${{ env.ARMBIAN_SHA }}
 
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-${{ matrix.BRANCH }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ matrix.BRANCH }}-
+
       - name: Build Kernel
         run: |
           export GITHUB_ACTIONS=false
+          mkdir -p .ccache
           sudo --preserve-env ./compile.sh kernel \
             ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} \
-            EXPERT=yes USE_CCACHE=no SKIP_INIT_BINFMTS=yes
+            EXPERT=yes USE_CCACHE=yes CCACHE_DIR=$(pwd)/.ccache SKIP_INIT_BINFMTS=yes
           sudo chown $(id -u):$(id -g) -R output/
+          sudo chown $(id -u):$(id -g) -R .ccache
 
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
@@ -139,23 +150,19 @@ jobs:
           sudo apt update && sudo apt install -y img2simg
           curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64 && chmod +x ./AmlImg
           
-          # --- 增强型内核版本提取逻辑 ---
-          ls -l output/debs/
+          # 精确提取内核版本
           DEB_FILE=$(ls output/debs/linux-image-*.deb | head -n 1)
-          if [ -z "$DEB_FILE" ]; then
-            KERNEL_VER="unknown"
+          if [ -n "$DEB_FILE" ]; then
+            KERNEL_VER=$(dpkg-deb -f "$DEB_FILE" Version)
           else
-            # 提取文件名，并以下划线分割取第二段版本号
-            KERNEL_VER=$(basename $DEB_FILE | cut -d'_' -f2)
+            KERNEL_VER="unknown"
           fi
           echo "kernel_ver=$KERNEL_VER" >> $GITHUB_OUTPUT
-          # ----------------------------
           
           DATE_STR=$(date +%Y%m%d)
           BASE_NAME="Armbian_Onecloud_${DATE_STR}_${{ matrix.RELEASE }}_${{ matrix.BRANCH }}_${KERNEL_VER}_${{ matrix.TYPE }}"
           BURN_NAME="${BASE_NAME}_Burn_Package"
           
-          # 处理线刷包逻辑
           curl -L -o ./uboot.img https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}
           ./AmlImg unpack ./uboot.img burn/
           diskimg=$(ls output/images/*.img)
