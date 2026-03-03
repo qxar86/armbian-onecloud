@@ -80,6 +80,21 @@ jobs:
           repository: ${{ env.ARMBIAN_REPO }}
           ref: ${{ env.ARMBIAN_SHA }}
 
+      - name: Apply patches #4077 and #5076
+        if: ${{ env.PATCHES }}
+        run: |
+          echo "::group::Download patches"
+          curl -L -O "https://github.com/armbian/build/pull/{${PATCHES}}.patch"
+          echo "::endgroup::"
+
+          for file in *.patch; do
+            if [ -f "$file" ]; then
+              echo "::group::Applying $file"
+              patch --batch -p1 -N <"$file" || echo "Patch $file failed or already applied (continuing)"
+              echo "::endgroup::"
+            fi
+          done
+
       - name: Cache ccache
         uses: actions/cache@v4
         with:
@@ -113,7 +128,7 @@ jobs:
       fail-fast: false
       matrix:
         BRANCH: [current]
-        RELEASE: [jammy, noble, bookworm, trixie]   # 已加入 trixie (Debian 13)
+        RELEASE: [jammy, noble, bookworm, trixie]
         TYPE: [minimal, cli]
     steps:
       - name: Import env
@@ -124,6 +139,21 @@ jobs:
         with:
           repository: ${{ env.ARMBIAN_REPO }}
           ref: ${{ env.ARMBIAN_SHA }}
+
+      - name: Apply patches #4077 and #5076
+        if: ${{ env.PATCHES }}
+        run: |
+          echo "::group::Download patches"
+          curl -L -O "https://github.com/armbian/build/pull/{${PATCHES}}.patch"
+          echo "::endgroup::"
+
+          for file in *.patch; do
+            if [ -f "$file" ]; then
+              echo "::group::Applying $file"
+              patch --batch -p1 -N <"$file" || echo "Patch $file failed or already applied (continuing)"
+              echo "::endgroup::"
+            fi
+          done
 
       - name: Download Kernel Debs
         uses: actions/download-artifact@v4
@@ -148,20 +178,18 @@ jobs:
           sudo apt update && sudo apt install -y img2simg
           curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64 && chmod +x ./AmlImg
           
-          # 优先找带有 __ 的内核 deb 包（Armbian 常见命名）
           DEB_FILE=$(ls output/debs/linux-image-*__*.deb 2>/dev/null | head -n 1)
           [ -z "$DEB_FILE" ] && DEB_FILE=$(ls output/debs/linux-image-*.deb | head -n 1)
           
           if [ -z "$DEB_FILE" ]; then
-            echo "::error::没有找到 linux-image deb 包"
+            echo "::error::No linux-image deb found"
             exit 1
           fi
           
-          echo "使用的 deb 包: $(basename "$DEB_FILE")"
+          echo "Used deb: $(basename "$DEB_FILE")"
           
           FILENAME=$(basename "$DEB_FILE" .deb)
           
-          # 提取 Armbian 版本（_ 之后 到 __ 之前）
           if [[ "$FILENAME" =~ _([0-9]+\.[0-9]+\.[0-9]+(-trunk)?)__ ]]; then
             ARMBIAN_VER="${BASH_REMATCH[1]}"
           else
@@ -169,35 +197,29 @@ jobs:
             [ -z "$ARMBIAN_VER" ] && ARMBIAN_VER="unknown"
           fi
           
-          # 提取内核版本（__ 后面的 x.y.z）
           if [[ "$FILENAME" =~ __([0-9]+\.[0-9]+\.[0-9]+) ]]; then
             REAL_KERNEL="${BASH_REMATCH[1]}"
           else
             REAL_KERNEL=$(echo "$FILENAME" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -n1 || echo "unknown")
           fi
           
-          echo "提取到的 Armbian 版本: $ARMBIAN_VER"
-          echo "提取到的内核版本: $REAL_KERNEL"
+          echo "Armbian ver: $ARMBIAN_VER"
+          echo "Kernel ver: $REAL_KERNEL"
           
           echo "kernel_ver=$REAL_KERNEL" >> $GITHUB_OUTPUT
           echo "armbian_ver=$ARMBIAN_VER" >> $GITHUB_OUTPUT
           
-          # 文件名
           BASE_NAME="Armbian_Onecloud_${ARMBIAN_VER}_${{ matrix.RELEASE }}_${{ matrix.BRANCH }}_${REAL_KERNEL}_${{ matrix.TYPE }}"
           BURN_NAME="${BASE_NAME}.burn"
           
-          echo "生成的普通镜像名: ${BASE_NAME}.img"
-          echo "生成的烧录包名  : ${BURN_NAME}.img"
+          echo "Base image: ${BASE_NAME}.img"
+          echo "Burn image: ${BURN_NAME}.img"
           
-          # 生成烧录包
           curl -L -o ./uboot.img https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}
           ./AmlImg unpack ./uboot.img burn/
           
           diskimg=$(ls output/images/*.img | head -n 1)
-          if [ -z "$diskimg" ]; then
-            echo "::error::output/images/ 里没有找到 .img 文件"
-            exit 1
-          fi
+          [ -z "$diskimg" ] && { echo "::error::No .img found"; exit 1; }
           
           loop=$(sudo losetup --find --show --partscan "$diskimg")
           sudo img2simg "${loop}p1" burn/boot.simg
@@ -222,10 +244,9 @@ jobs:
         run: |
           cd output/images/
           for f in *.img; do
-            if [ -f "$f" ]; then
-              sha256sum "$f" >> ../../sha256sum_list.txt
-              xz -9 --threads=0 "$f"
-            fi
+            [ -f "$f" ] || continue
+            sha256sum "$f" >> ../../sha256sum_list.txt
+            xz -9 --threads=0 "$f"
           done
 
       - name: Upload to Release
@@ -235,9 +256,9 @@ jobs:
           append_body: true
           body: |
             ---
-            ### 镜像规格: ${{ matrix.RELEASE }} - ${{ matrix.TYPE }}
-            - **Armbian 版本** : `${{ steps.postprocess.outputs.armbian_ver }}`
-            - **内核版本**   : `${{ steps.postprocess.outputs.kernel_ver }}`
+            ### ${{ matrix.RELEASE }} - ${{ matrix.TYPE }}
+            - **Armbian 版本**: `${{ steps.postprocess.outputs.armbian_ver }}`
+            - **内核版本**: `${{ steps.postprocess.outputs.kernel_ver }}`
           files: |
             output/images/*.xz
             output/images/*.burn.img
