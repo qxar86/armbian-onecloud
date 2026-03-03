@@ -33,7 +33,8 @@ jobs:
         name: Get repositories information
         run: |
           TIME="$(curl -s https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
-          TAG="ci-$(date -d "${TIME}" -u +'%Y%m%d-%H%M%S-%Z')"
+          # 格式化 TAG，去除多余前缀
+          TAG="ci-$(date -d "${TIME}" -u +'%Y%m%d-%H%M%S')"
           SCRIPT_SHA=$(curl -s https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
           UBOOT_TAG=$(curl -s https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
           ARMBIAN_SHA=$(curl -s https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF} | jq -r .sha)
@@ -54,7 +55,6 @@ jobs:
         with:
           tag_name: ${{ steps.get.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          # 修正此处：删掉多余的 CI 前缀，直接使用 tag
           name: ${{ steps.get.outputs.tag }}
           body: |
             ## 构建说明
@@ -63,7 +63,6 @@ jobs:
             
             ## 源码信息
             - Armbian: [${{ env.ARMBIAN_REPO }}](${{ github.server_url }}/${{ env.ARMBIAN_REPO }}/tree/${{ env.ARMBIAN_SHA }})
-            - U-Boot: [${{ env.UBOOT_REPO }}](${{ github.server_url }}/${{ env.UBOOT_REPO }}/releases/tag/${{ env.UBOOT_TAG }})
 
   build-debs:
     name: Build Kernel
@@ -115,7 +114,7 @@ jobs:
       fail-fast: false
       matrix:
         BRANCH: [current]
-        RELEASE: [jammy, noble, bookworm, trixie]
+        RELEASE: [jammy, noble, bookworm]
         TYPE: [minimal, cli]
     steps:
       - name: Import env
@@ -144,25 +143,28 @@ jobs:
               BUILD_DESKTOP=no COMPRESS_OUTPUTIMAGE=img
           sudo chown $(id -u):$(id -g) -R output/
 
-      - name: Post Process & Rename with Version Mark
+      - name: Post Process & Rename
         id: postprocess
         run: |
           sudo apt update && sudo apt install -y img2simg
           curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64 && chmod +x ./AmlImg
           
-          # 精确提取内核版本
+          # 1. 提取真正的内核版本 (例如 6.6.16)
           DEB_FILE=$(ls output/debs/linux-image-*.deb | head -n 1)
-          if [ -n "$DEB_FILE" ]; then
-            KERNEL_VER=$(dpkg-deb -f "$DEB_FILE" Version)
-          else
-            KERNEL_VER="unknown"
-          fi
-          echo "kernel_ver=$KERNEL_VER" >> $GITHUB_OUTPUT
+          REAL_KERNEL=$(dpkg-deb -f "$DEB_FILE" Package | sed 's/linux-image-//;s/-onecloud//')
+          
+          # 2. 提取 Armbian 编译版本号 (例如 26.02.0-trunk)
+          ARMBIAN_VER=$(dpkg-deb -f "$DEB_FILE" Version)
+          
+          echo "kernel_ver=$REAL_KERNEL" >> $GITHUB_OUTPUT
+          echo "armbian_ver=$ARMBIAN_VER" >> $GITHUB_OUTPUT
           
           DATE_STR=$(date +%Y%m%d)
-          BASE_NAME="Armbian_Onecloud_${DATE_STR}_${{ matrix.RELEASE }}_${{ matrix.BRANCH }}_${KERNEL_VER}_${{ matrix.TYPE }}"
+          # 文件名组合：包含日期、系统、分支、内核号、Armbian版本和类型
+          BASE_NAME="Armbian_Onecloud_${DATE_STR}_${{ matrix.RELEASE }}_${{ matrix.BRANCH }}_${REAL_KERNEL}_${ARMBIAN_VER}_${{ matrix.TYPE }}"
           BURN_NAME="${BASE_NAME}_Burn_Package"
           
+          # 处理刷机包
           curl -L -o ./uboot.img https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}
           ./AmlImg unpack ./uboot.img burn/
           diskimg=$(ls output/images/*.img)
@@ -199,6 +201,8 @@ jobs:
           body: |
             ---
             ### 镜像规格: ${{ matrix.RELEASE }}-${{ matrix.TYPE }}
-            - **内核分支**: `${{ matrix.BRANCH }}`
             - **内核版本**: `${{ steps.postprocess.outputs.kernel_ver }}`
-          files: output/images/*.xz
+            - **编译版本**: `${{ steps.postprocess.outputs.armbian_ver }}`
+          files: |
+            output/images/*.xz
+            output/images/*.burn.img
