@@ -6,7 +6,7 @@ on:
     branches:
       - main
     paths:
-      - .github/workflows/one.yml
+      - .github/workflows/ci.yml
 
 env:
   SCRIPT_REPO: ${{ github.repository }}
@@ -108,8 +108,10 @@ jobs:
           body_path: Body.md
           draft: false
           prerelease: false
-          fail_on_unmatched_files: false          # 关键：防止无文件时报错
+          fail_on_unmatched_files: false
           generate_release_notes: false
+          make_latest: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   build-debs:
     name: Build ${{ matrix.BRANCH }} kernel debs
