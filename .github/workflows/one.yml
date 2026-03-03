@@ -11,7 +11,7 @@ on:
 env:
   SCRIPT_REPO: ${{ github.repository }}
   SCRIPT_REF: ${{ github.ref_name }}
-  UBOOT_REPO: hzyitc/u-boot-onecloud
+  UBOOT_REPO: qxar86/onecloud-u-boot
   UBOOT_RELEASE: latest
   UBOOT_BURNIMG: eMMC.burn.img
   ARMBIAN_REPO: armbian/build
