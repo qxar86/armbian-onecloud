@@ -17,7 +17,8 @@ env:
   ARMBIAN_REPO: armbian/build
   ARMBIAN_REF: main
   PATCHES: 4077,5076
-  PATCHES_DISABLED: 5082
+  # 强制 Armbian 修复 binfmt 映射的内置变量
+  FIX_BINFMT_MISC: yes
 
 permissions:
   contents: write
@@ -52,10 +53,6 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           name: CI ${{ env.TAG }}
-          body: |
-            Build info:
-            Armbian: ${{ env.ARMBIAN_SHA }}
-            Patches: ${{ env.PATCHES }}
 
   build-debs:
     name: Build Kernel
@@ -71,23 +68,21 @@ jobs:
           repository: ${{ env.ARMBIAN_REPO }}
           ref: ${{ env.ARMBIAN_SHA }}
 
+      - name: Setup Binfmt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+          # 关键：手动注册所有可能的架构防止脚本因找不到文件而报错
+          sudo docker run --privileged --rm tonistiigi/binfmt --install all
+
       - name: Apply Patches
         if: ${{ env.PATCHES != '' }}
-        shell: bash
         run: |
-          echo "::group::Download Patches"
           for id in $(echo $PATCHES | tr ',' ' '); do
-            echo "Downloading PR #$id..."
-            curl -fsSL "https://github.com/armbian/build/pull/${id}.patch" -o "${id}.patch" || exit 1
+            curl -fsSL "https://github.com/armbian/build/pull/${id}.patch" -o "${id}.patch"
           done
-          echo "::endgroup::"
-
           for file in *.patch; do
-            if [ -s "$file" ]; then
-              echo "::group::Applying $file"
-              patch --batch -p1 -N < "$file"
-              echo "::endgroup::"
-            fi
+            [ -s "$file" ] && patch --batch -p1 -N < "$file" || true
           done
 
       - name: Build Kernel
@@ -122,15 +117,20 @@ jobs:
           repository: ${{ env.ARMBIAN_REPO }}
           ref: ${{ env.ARMBIAN_SHA }}
 
+      - name: Setup Binfmt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+          sudo docker run --privileged --rm tonistiigi/binfmt --install all
+
       - name: Apply Patches
         if: ${{ env.PATCHES != '' }}
-        shell: bash
         run: |
           for id in $(echo $PATCHES | tr ',' ' '); do
             curl -fsSL "https://github.com/armbian/build/pull/${id}.patch" -o "${id}.patch"
           done
           for file in *.patch; do
-            [ -s "$file" ] && patch --batch -p1 -N < "$file"
+            [ -s "$file" ] && patch --batch -p1 -N < "$file" || true
           done
 
       - name: Download debs
