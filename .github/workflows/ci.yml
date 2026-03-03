@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       env: ${{ steps.get.outputs.env }}
+      tag: ${{ steps.get.outputs.tag }}
     steps:
       - id: get
         name: Get repositories information
@@ -45,14 +46,15 @@ jobs:
             echo "ARMBIAN_SHA=$ARMBIAN_SHA"
           } >> "$GITHUB_ENV"
           
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "env=$(cat $GITHUB_ENV | base64 -w 0)" >> $GITHUB_OUTPUT
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.TAG }}
+          tag_name: ${{ steps.get.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: CI ${{ env.TAG }}
+          name: CI ${{ steps.get.outputs.tag }}
           body: |
             ## 构建说明
             - 包含线刷包 (Burn Package) 和普通镜像 (Standard Image)
@@ -82,7 +84,10 @@ jobs:
       - name: Build Kernel
         run: |
           export GITHUB_ACTIONS=false
-          sudo --preserve-env ./compile.sh kernel ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} EXPERT=yes USE_CCACHE=no
+          # 使用 SKIP_INIT_BINFMTS=yes 屏蔽环境初始化报错
+          sudo --preserve-env ./compile.sh kernel \
+            ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} \
+            EXPERT=yes USE_CCACHE=no SKIP_INIT_BINFMTS=yes
           sudo chown $(id -u):$(id -g) -R output/
 
       - name: Upload Kernel Artifacts
@@ -121,25 +126,32 @@ jobs:
       - name: Build OS Image
         run: |
           export GITHUB_ACTIONS=false
+          # 使用 SKIP_INIT_BINFMTS=yes 屏蔽环境初始化报错
           sudo --preserve-env ./compile.sh build \
               ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} RELEASE=${{ matrix.RELEASE }} \
               KERNEL_CONFIGURE=no EXPERT=yes SKIP_EXTERNAL_TOOLCHAINS=yes USE_CCACHE=no \
+              SKIP_INIT_BINFMTS=yes \
               BUILD_MINIMAL=${{ matrix.TYPE == 'minimal' && 'yes' || 'no' }} \
               BUILD_DESKTOP=no COMPRESS_OUTPUTIMAGE=img
           sudo chown $(id -u):$(id -g) -R output/
 
       - name: Post Process & Rename with Version Mark
+        id: postprocess
         run: |
           sudo apt update && sudo apt install -y img2simg
           curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64 && chmod +x ./AmlImg
           
+          # 动态提取内核版本号
+          KERNEL_VER=$(ls output/debs/linux-image-${{ matrix.BRANCH }}-onecloud_*.deb | head -n 1 | cut -d'_' -f2)
           DATE_STR=$(date +%Y%m%d)
-          # 定义基础文件名
-          BASE_NAME="Armbian_Onecloud_${DATE_STR}_${{ matrix.RELEASE }}_${{ matrix.TYPE }}"
-          # 定义带标注的线刷包名
+          
+          # 组合增强版文件名
+          BASE_NAME="Armbian_Onecloud_${DATE_STR}_${{ matrix.RELEASE }}_${{ matrix.BRANCH }}_${KERNEL_VER}_${{ matrix.TYPE }}"
           BURN_NAME="${BASE_NAME}_Burn_Package"
           
-          # 处理刷机包逻辑
+          echo "kernel_ver=$KERNEL_VER" >> $GITHUB_OUTPUT
+          
+          # 处理刷机包
           curl -L -o ./uboot.img https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}
           ./AmlImg unpack ./uboot.img burn/
           diskimg=$(ls output/images/*.img)
@@ -157,9 +169,7 @@ jobs:
           VERIFY:rootfs:normal:rootfs.VERIFY
           EOF
           
-          # 打包线刷镜像（添加标注）
           ./AmlImg pack output/images/${BURN_NAME}.burn.img burn/
-          # 重命名普通镜像
           mv $diskimg output/images/${BASE_NAME}.img
 
       - name: Compress & Hash
@@ -175,4 +185,9 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           append_body: true
+          body: |
+            ---
+            ### 镜像规格: ${{ matrix.RELEASE }}-${{ matrix.TYPE }}
+            - **内核分支**: `${{ matrix.BRANCH }}`
+            - **内核版本**: `${{ steps.postprocess.outputs.kernel_ver }}`
           files: output/images/*.xz
