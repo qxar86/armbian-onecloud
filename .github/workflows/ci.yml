@@ -113,9 +113,8 @@ jobs:
       fail-fast: false
       matrix:
         BRANCH: [current]
-        RELEASE: [jammy, noble, bookworm]
+        RELEASE: [jammy, noble, bookworm, trixie]   # 已加入 trixie (Debian 13)
         TYPE: [minimal, cli]
-
     steps:
       - name: Import env
         run: echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >> $GITHUB_ENV
@@ -149,7 +148,7 @@ jobs:
           sudo apt update && sudo apt install -y img2simg
           curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64 && chmod +x ./AmlImg
           
-          # 找到内核 deb 包（优先匹配 __ 模式）
+          # 优先找带有 __ 的内核 deb 包（Armbian 常见命名）
           DEB_FILE=$(ls output/debs/linux-image-*__*.deb 2>/dev/null | head -n 1)
           [ -z "$DEB_FILE" ] && DEB_FILE=$(ls output/debs/linux-image-*.deb | head -n 1)
           
@@ -167,15 +166,14 @@ jobs:
             ARMBIAN_VER="${BASH_REMATCH[1]}"
           else
             ARMBIAN_VER=$(dpkg-deb -f "$DEB_FILE" Version | cut -d'~' -f1 | sed 's/-[a-z0-9]\+$//')
-            [ -z "$ARMBIAN_VER" ] && ARMBIAN_VER="unknown-ver"
+            [ -z "$ARMBIAN_VER" ] && ARMBIAN_VER="unknown"
           fi
           
-          # 提取内核版本（__ 后面的第一个 x.y.z 格式）
+          # 提取内核版本（__ 后面的 x.y.z）
           if [[ "$FILENAME" =~ __([0-9]+\.[0-9]+\.[0-9]+) ]]; then
             REAL_KERNEL="${BASH_REMATCH[1]}"
           else
-            REAL_KERNEL=$(dpkg-deb -f "$DEB_FILE" Version | grep -oE '6\.[0-9]+\.[0-9]+' | head -n1)
-            [ -z "$REAL_KERNEL" ] && REAL_KERNEL="unknown-kernel"
+            REAL_KERNEL=$(echo "$FILENAME" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -n1 || echo "unknown")
           fi
           
           echo "提取到的 Armbian 版本: $ARMBIAN_VER"
@@ -184,7 +182,7 @@ jobs:
           echo "kernel_ver=$REAL_KERNEL" >> $GITHUB_OUTPUT
           echo "armbian_ver=$ARMBIAN_VER" >> $GITHUB_OUTPUT
           
-          # 文件名格式
+          # 文件名
           BASE_NAME="Armbian_Onecloud_${ARMBIAN_VER}_${{ matrix.RELEASE }}_${{ matrix.BRANCH }}_${REAL_KERNEL}_${{ matrix.TYPE }}"
           BURN_NAME="${BASE_NAME}.burn"
           
