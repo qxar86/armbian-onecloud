@@ -12,7 +12,7 @@ env:
   UBOOT_REPO: qxar86/onecloud-u-boot
   UBOOT_RELEASE: latest
   UBOOT_BURNIMG: eMMC.burn.img
-  ARMBIAN_REPO: armbian/build
+  ARMBIAN_REPO: hzyitc/armbian-onecloud
   ARMBIAN_REF: main
   PATCHES: ""  # 已移除 patch
 permissions:
