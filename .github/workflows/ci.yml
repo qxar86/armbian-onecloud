@@ -33,7 +33,6 @@ jobs:
         name: Get repositories information
         run: |
           TIME="$(curl -s https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
-          # 格式化 TAG，去除多余前缀
           TAG="ci-$(date -d "${TIME}" -u +'%Y%m%d-%H%M%S')"
           SCRIPT_SHA=$(curl -s https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
           UBOOT_TAG=$(curl -s https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
@@ -149,30 +148,63 @@ jobs:
           sudo apt update && sudo apt install -y img2simg
           curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64 && chmod +x ./AmlImg
           
-          # 提取内核版本，例如：6.12.43
-          DEB_FILE=$(ls output/debs/linux-image-*.deb | head -n 1)
-          REAL_KERNEL=$(dpkg-deb -f "$DEB_FILE" Package | sed 's/linux-image-//;s/-onecloud//')
+          # 找到内核 deb 包（优先找 arm64 架构的）
+          DEB_FILE=$(ls output/debs/linux-image-*_arm64.deb 2>/dev/null | head -n 1)
+          [ -z "$DEB_FILE" ] && DEB_FILE=$(ls output/debs/linux-image-*.deb | head -n 1)
           
-          # 提取 Armbian 版本，例如：25.11.0-trunk
+          if [ -z "$DEB_FILE" ]; then
+            echo "错误：没有找到 linux-image 相关的 deb 包" >&2
+            exit 1
+          fi
+          
+          echo "使用的 deb 包: $DEB_FILE"
+          
+          # 尝试从 Version 字段提取内核版本（最可靠的方式）
+          REAL_KERNEL=$(dpkg-deb -f "$DEB_FILE" Version | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?' | head -n 1)
+          
+          # 如果 Version 里没有纯数字版本，fallback 到清理 Package 字段
+          if [ -z "$REAL_KERNEL" ]; then
+            PKG_NAME=$(dpkg-deb -f "$DEB_FILE" Package)
+            REAL_KERNEL=$(echo "$PKG_NAME" | sed -E '
+              s/^linux-image-//;
+              s/-onecloud$//;
+              s/-(current|edge|legacy|meson|amlogic|meson8b|mesongxl|mesongxbb).*//;
+              s/-[a-z]+-[0-9]+$//;
+              s/^[a-z]+-//;
+              ' | grep -E '^[0-9]+\.[0-9]+' || echo "unknown")
+          fi
+          
+          # Armbian 版本号（保留 -trunk，如果有的话）
           ARMBIAN_FULL_VER=$(dpkg-deb -f "$DEB_FILE" Version)
-          ARMBIAN_VER=$(echo "$ARMBIAN_FULL_VER" | cut -d'~' -f1)
+          ARMBIAN_VER=$(echo "$ARMBIAN_FULL_VER" | cut -d'~' -f1 | sed 's/-[a-z0-9]\+$//')
+          
+          echo "提取到的内核版本: $REAL_KERNEL"
+          echo "提取到的 Armbian 版本: $ARMBIAN_VER"
           
           echo "kernel_ver=$REAL_KERNEL" >> $GITHUB_OUTPUT
           echo "armbian_ver=$ARMBIAN_VER" >> $GITHUB_OUTPUT
           
-          # 文件命名：你指定的风格
+          # 最终文件名（你想要的格式）
           BASE_NAME="Armbian_Onecloud_${ARMBIAN_VER}_${{ matrix.RELEASE }}_${{ matrix.BRANCH }}_${REAL_KERNEL}_${{ matrix.TYPE }}"
           BURN_NAME="${BASE_NAME}.burn"
           
-          # 处理刷机包
+          echo "生成的普通镜像名: ${BASE_NAME}.img"
+          echo "生成的烧录包名: ${BURN_NAME}.img"
+          
+          # 生成烧录包
           curl -L -o ./uboot.img https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}
           ./AmlImg unpack ./uboot.img burn/
           
-          diskimg=$(ls output/images/*.img)
-          loop=$(sudo losetup --find --show --partscan $diskimg)
-          sudo img2simg ${loop}p1 burn/boot.simg
-          sudo img2simg ${loop}p2 burn/rootfs.simg
-          sudo losetup -d $loop
+          diskimg=$(ls output/images/*.img | head -n 1)
+          if [ -z "$diskimg" ]; then
+            echo "错误：output/images/ 里没有找到 .img 文件" >&2
+            exit 1
+          fi
+          
+          loop=$(sudo losetup --find --show --partscan "$diskimg")
+          sudo img2simg "${loop}p1" burn/boot.simg
+          sudo img2simg "${loop}p2" burn/rootfs.simg
+          sudo losetup -d "$loop"
           
           echo -n "sha1sum $(sha1sum burn/boot.simg | awk '{print $1}')" > burn/boot.VERIFY
           echo -n "sha1sum $(sha1sum burn/rootfs.simg | awk '{print $1}')" > burn/rootfs.VERIFY
@@ -186,15 +218,17 @@ jobs:
           
           ./AmlImg pack output/images/${BURN_NAME}.img burn/
           
-          # 普通镜像改名
+          # 重命名普通镜像
           mv "$diskimg" "output/images/${BASE_NAME}.img"
 
       - name: Compress & Hash
         run: |
           cd output/images/
           for f in *.img; do
-            sha256sum "$f" >> ../../sha256sum_list
-            xz -9 --threads=0 "$f"
+            if [ -f "$f" ]; then
+              sha256sum "$f" >> ../../sha256sum_list.txt
+              xz -9 --threads=0 "$f"
+            fi
           done
 
       - name: Upload to Release
@@ -204,9 +238,9 @@ jobs:
           append_body: true
           body: |
             ---
-            ### 镜像规格: ${{ matrix.RELEASE }}-${{ matrix.TYPE }}
-            - **内核版本**: `${{ steps.postprocess.outputs.kernel_ver }}`
+            ### 镜像规格: ${{ matrix.RELEASE }} - ${{ matrix.TYPE }}
             - **Armbian 版本**: `${{ steps.postprocess.outputs.armbian_ver }}`
+            - **内核版本**: `${{ steps.postprocess.outputs.kernel_ver }}`
           files: |
             output/images/*.xz
             output/images/*.burn.img
