@@ -1,16 +1,12 @@
-name: one
+name: OneCloud-Armbian-CI
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/one.yml
+    branches: [ main ]
+    paths: [ '.github/workflows/one.yml' ]
 
 env:
-  SCRIPT_REPO: ${{ github.repository }}
-  SCRIPT_REF: ${{ github.ref_name }}
   UBOOT_REPO: qxar86/onecloud-u-boot
   UBOOT_RELEASE: latest
   UBOOT_BURNIMG: eMMC.burn.img
@@ -32,60 +28,48 @@ jobs:
       - id: get
         name: Get repositories information
         run: |
-          TIME="$(curl -s https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
-          TAG="ci-$(date -d "${TIME}" -u +'%Y%m%d-%H%M%S')"
+          TIME=$(date +'%Y-%m-%d %H:%M:%S')
+          # 显式生成 Tag 并传递给 outputs 以修复报错
+          TAG="ci-$(date +'%Y%m%d-%H%M%S')"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           
-          # 构建环境参数并导出
           UBOOT_TAG=$(curl -s https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
-          cat <<EOF | sed -E 's/^ //' >> $GITHUB_ENV
-            TIME=$TIME
-            TAG=$TAG
-            UBOOT_TAG=$UBOOT_TAG
-          EOF
+          
+          echo "TIME=$TIME" >> $GITHUB_ENV
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "UBOOT_TAG=$UBOOT_TAG" >> $GITHUB_ENV
+          
           echo "env=$(cat $GITHUB_ENV | base64 -w 0)" >> $GITHUB_OUTPUT
 
-      - name: Create Release with Instructions
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.TAG }}
-          name: 玩客云 Armbian 自动构建 - $(date -d "${{ env.TIME }}" +'%Y%m%d')
+          tag_name: ${{ steps.get.outputs.tag }}
+          name: 玩客云 Armbian - ${{ steps.get.outputs.tag }}
           body: |
-            ## 📝 刷机说明 (Flashing Guide)
-            
-            ### 1. 线刷固件 (`.burn.img.xz`)
-            - **适用场景**：直接刷入 eMMC，替换原系统。
-            - **工具**：使用 Windows 平台的 `Amlogic USB Burning Tool`。
-            - **步骤**：
-              1. 解压 `.burn.img.xz` 得到 `.burn.img`。
-              2. 打开烧录工具，导入镜像，点击“开始”。
-              3. 按住玩客云 **Reset 键**（或短接），接入双公头 USB 线至靠近网口的 USB 口，通电。
-            
-            ### 2. 卡刷镜像 (`.img.xz`)
-            - **工具**：`Rufus` 或 `BalenaEtcher`。
-            - **步骤**：将镜像写入 SD 卡或 U 盘，插入设备后通过 U-Boot 引导。
-            
-            ### 🔑 默认账户
-            - **用户**: `root`
-            - **密码**: `1234`
-            
-            ---
-            *构建时间: ${{ env.TIME }}*
+            ## 📝 刷机说明
+            - **线刷包 (.burn.img.xz)**：使用 Amlogic USB Burning Tool 直接刷入 eMMC。
+            - **卡刷包 (.img.xz)**：使用 Rufus 或 Etcher 写入 SD 卡启动。
+            - **系统版本**：Ubuntu 22.04 (Jammy), Debian 12 (Bookworm), **Debian 13 (Trixie)**。
+            - **内核说明**：仅编译 Current (主流稳定) 内核，已移除 Legacy 内核。
           draft: false
           prerelease: false
           token: ${{ secrets.GITHUB_TOKEN }}
 
-  build-debs:
-    name: Build ${{ matrix.BRANCH }} Kernel
+  build:
+    name: Build ${{ matrix.RELEASE }}
     needs: prepare
     runs-on: ubuntu-22.04
     strategy:
+      fail-fast: false
       matrix:
-        BRANCH: [current, legacy]
+        BRANCH: [current] # 仅保留 Current 分支
+        RELEASE: [jammy, bookworm, trixie] # 包含 Debian 13 (Trixie)
     steps:
-      - name: Cleanup Disk Space
+      - name: 🧹 释放磁盘空间
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          # 删除预装软件以腾出约 20GB+ 空间
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           sudo apt-get clean
 
       - name: Import env
@@ -95,67 +79,29 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.ARMBIAN_REPO }}
-          ref: main
-
-      - name: Build Kernel
-        run: |
-          export GITHUB_ACTIONS=false
-          sudo --preserve-env ./compile.sh kernel ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} EXPERT=yes USE_CCACHE=no
-          sudo chown -R $(id -u):$(id -g) output/
-
-      - name: Upload Kernel Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: debs-${{ matrix.BRANCH }}
-          path: output/debs/*
-
-  build:
-    name: Build ${{ matrix.RELEASE }}-${{ matrix.BRANCH }}
-    needs: [prepare, build-debs]
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        BRANCH: [current, legacy]
-        RELEASE: [jammy, bookworm, noble]
-        TYPE: [minimal]
-    steps:
-      - name: Cleanup Disk Space
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-
-      - name: Import env
-        run: echo "${{ needs.prepare.outputs.env }}" | base64 -d >> $GITHUB_ENV
-
-      - name: Checkout Armbian
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.ARMBIAN_REPO }}
-          ref: main
-
-      - name: Download Kernel Debs
-        uses: actions/download-artifact@v4
-        with:
-          name: debs-${{ matrix.BRANCH }}
-          path: output/debs/
+          ref: ${{ env.ARMBIAN_REF }}
 
       - name: Build Image
         run: |
           export GITHUB_ACTIONS=false
+          # 执行 Armbian 编译脚本
           sudo --preserve-env ./compile.sh build ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} RELEASE=${{ matrix.RELEASE }} \
-            KERNEL_CONFIGURE=no BUILD_MINIMAL=yes BUILD_DESKTOP=no EXPERT=yes SKIP_EXTERNAL_TOOLCHAINS=yes CLEAN_LEVEL= USE_CCACHE=no COMPRESS_OUTPUTIMAGE=sha,xz
+            BUILD_MINIMAL=yes BUILD_DESKTOP=no EXPERT=yes KERNEL_CONFIGURE=no \
+            SKIP_EXTERNAL_TOOLCHAINS=yes CLEAN_LEVEL= USE_CCACHE=no COMPRESS_OUTPUTIMAGE=sha,xz
           sudo chown -R $(id -u):$(id -g) output/
 
       - name: Process Amlogic Burn Image
         run: |
           sudo apt update && sudo apt install -y img2simg
+          # 下载线刷转换工具 AmlImg
           curl -L -o AmlImg "https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64"
           chmod +x AmlImg
           
-          # 下载 U-Boot 线刷底包
+          # 下载 U-Boot 底包并解包
           curl -L -o uboot.img "https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}"
           ./AmlImg unpack ./uboot.img burn/
           
-          # 提取 Armbian 分区并转换
+          # 将编译好的镜像挂载并提取分区
           diskimg=$(ls -1 output/images/*.img | head -n1)
           loop=$(sudo losetup --find --show --partscan "$diskimg")
           sleep 2
@@ -163,7 +109,7 @@ jobs:
           sudo img2simg "${loop}p2" burn/rootfs.simg
           sudo losetup -d "$loop"
           
-          # 生成校验并打包
+          # 生成线刷包指令
           echo -n "sha1sum $(sha1sum burn/boot.simg | awk '{print $1}')" > burn/boot.VERIFY
           echo -n "sha1sum $(sha1sum burn/rootfs.simg | awk '{print $1}')" > burn/rootfs.VERIFY
           cat <<EOF >> burn/commands.txt
@@ -173,6 +119,7 @@ jobs:
           VERIFY:rootfs:normal:rootfs.VERIFY
           EOF
           
+          # 重新打包为线刷镜像并压缩
           burn_name="$(basename "$diskimg" .img).burn.img"
           ./AmlImg pack "$burn_name" burn/
           xz -9 -T0 "$burn_name"
@@ -180,7 +127,7 @@ jobs:
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.TAG }}
+          tag_name: ${{ needs.prepare.outputs.tag }} # 引用 prepare 阶段生成的唯一标签
           files: |
             output/images/*.xz
             *.burn.img.xz
