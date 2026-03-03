@@ -149,32 +149,34 @@ jobs:
           sudo apt update && sudo apt install -y img2simg
           curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64 && chmod +x ./AmlImg
           
-          # 1. 提取真正的内核版本 (例如 6.6.16)
+          # 提取内核版本，例如：6.12.43
           DEB_FILE=$(ls output/debs/linux-image-*.deb | head -n 1)
           REAL_KERNEL=$(dpkg-deb -f "$DEB_FILE" Package | sed 's/linux-image-//;s/-onecloud//')
           
-          # 2. 提取 Armbian 编译版本号 (例如 26.02.0-trunk)
-          ARMBIAN_VER=$(dpkg-deb -f "$DEB_FILE" Version)
+          # 提取 Armbian 版本，例如：25.11.0-trunk
+          ARMBIAN_FULL_VER=$(dpkg-deb -f "$DEB_FILE" Version)
+          ARMBIAN_VER=$(echo "$ARMBIAN_FULL_VER" | cut -d'~' -f1)
           
           echo "kernel_ver=$REAL_KERNEL" >> $GITHUB_OUTPUT
           echo "armbian_ver=$ARMBIAN_VER" >> $GITHUB_OUTPUT
           
-          DATE_STR=$(date +%Y%m%d)
-          # 文件名组合：包含日期、系统、分支、内核号、Armbian版本和类型
-          BASE_NAME="Armbian_Onecloud_${DATE_STR}_${{ matrix.RELEASE }}_${{ matrix.BRANCH }}_${REAL_KERNEL}_${ARMBIAN_VER}_${{ matrix.TYPE }}"
-          BURN_NAME="${BASE_NAME}_Burn_Package"
+          # 文件命名：你指定的风格
+          BASE_NAME="Armbian_Onecloud_${ARMBIAN_VER}_${{ matrix.RELEASE }}_${{ matrix.BRANCH }}_${REAL_KERNEL}_${{ matrix.TYPE }}"
+          BURN_NAME="${BASE_NAME}.burn"
           
           # 处理刷机包
           curl -L -o ./uboot.img https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}
           ./AmlImg unpack ./uboot.img burn/
+          
           diskimg=$(ls output/images/*.img)
           loop=$(sudo losetup --find --show --partscan $diskimg)
           sudo img2simg ${loop}p1 burn/boot.simg
           sudo img2simg ${loop}p2 burn/rootfs.simg
           sudo losetup -d $loop
           
-          echo -n "sha1sum $(sha1sum burn/boot.simg | awk '{print $1}')" >burn/boot.VERIFY
-          echo -n "sha1sum $(sha1sum burn/rootfs.simg | awk '{print $1}')" >burn/rootfs.VERIFY
+          echo -n "sha1sum $(sha1sum burn/boot.simg | awk '{print $1}')" > burn/boot.VERIFY
+          echo -n "sha1sum $(sha1sum burn/rootfs.simg | awk '{print $1}')" > burn/rootfs.VERIFY
+          
           cat <<EOF >>burn/commands.txt
           PARTITION:boot:sparse:boot.simg
           VERIFY:boot:normal:boot.VERIFY
@@ -182,7 +184,9 @@ jobs:
           VERIFY:rootfs:normal:rootfs.VERIFY
           EOF
           
-          ./AmlImg pack output/images/${BURN_NAME}.burn.img burn/
+          ./AmlImg pack output/images/${BURN_NAME}.img burn/
+          
+          # 普通镜像改名
           mv "$diskimg" "output/images/${BASE_NAME}.img"
 
       - name: Compress & Hash
@@ -202,7 +206,7 @@ jobs:
             ---
             ### 镜像规格: ${{ matrix.RELEASE }}-${{ matrix.TYPE }}
             - **内核版本**: `${{ steps.postprocess.outputs.kernel_ver }}`
-            - **编译版本**: `${{ steps.postprocess.outputs.armbian_ver }}`
+            - **Armbian 版本**: `${{ steps.postprocess.outputs.armbian_ver }}`
           files: |
             output/images/*.xz
             output/images/*.burn.img
