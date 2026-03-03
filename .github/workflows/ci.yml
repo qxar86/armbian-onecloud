@@ -11,7 +11,7 @@ on:
 env:
   SCRIPT_REPO: ${{ github.repository }}
   SCRIPT_REF: ${{ github.ref_name }}
-  UBOOT_REPO: qxar86/onecloud-u-boot
+  UBOOT_REPO: hzyitc/u-boot
   UBOOT_RELEASE: latest
   UBOOT_BURNIMG: eMMC.burn.img
   ARMBIAN_REPO: armbian/build
@@ -84,7 +84,6 @@ jobs:
       - name: Build Kernel
         run: |
           export GITHUB_ACTIONS=false
-          # 使用 SKIP_INIT_BINFMTS=yes 屏蔽环境初始化报错
           sudo --preserve-env ./compile.sh kernel \
             ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} \
             EXPERT=yes USE_CCACHE=no SKIP_INIT_BINFMTS=yes
@@ -126,7 +125,6 @@ jobs:
       - name: Build OS Image
         run: |
           export GITHUB_ACTIONS=false
-          # 使用 SKIP_INIT_BINFMTS=yes 屏蔽环境初始化报错
           sudo --preserve-env ./compile.sh build \
               ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} RELEASE=${{ matrix.RELEASE }} \
               KERNEL_CONFIGURE=no EXPERT=yes SKIP_EXTERNAL_TOOLCHAINS=yes USE_CCACHE=no \
@@ -141,17 +139,23 @@ jobs:
           sudo apt update && sudo apt install -y img2simg
           curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64 && chmod +x ./AmlImg
           
-          # 动态提取内核版本号
-          KERNEL_VER=$(ls output/debs/linux-image-${{ matrix.BRANCH }}-onecloud_*.deb | head -n 1 | cut -d'_' -f2)
-          DATE_STR=$(date +%Y%m%d)
+          # --- 增强型内核版本提取逻辑 ---
+          ls -l output/debs/
+          DEB_FILE=$(ls output/debs/linux-image-*.deb | head -n 1)
+          if [ -z "$DEB_FILE" ]; then
+            KERNEL_VER="unknown"
+          else
+            # 提取文件名，并以下划线分割取第二段版本号
+            KERNEL_VER=$(basename $DEB_FILE | cut -d'_' -f2)
+          fi
+          echo "kernel_ver=$KERNEL_VER" >> $GITHUB_OUTPUT
+          # ----------------------------
           
-          # 组合增强版文件名
+          DATE_STR=$(date +%Y%m%d)
           BASE_NAME="Armbian_Onecloud_${DATE_STR}_${{ matrix.RELEASE }}_${{ matrix.BRANCH }}_${KERNEL_VER}_${{ matrix.TYPE }}"
           BURN_NAME="${BASE_NAME}_Burn_Package"
           
-          echo "kernel_ver=$KERNEL_VER" >> $GITHUB_OUTPUT
-          
-          # 处理刷机包
+          # 处理线刷包逻辑
           curl -L -o ./uboot.img https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}
           ./AmlImg unpack ./uboot.img burn/
           diskimg=$(ls output/images/*.img)
@@ -170,7 +174,7 @@ jobs:
           EOF
           
           ./AmlImg pack output/images/${BURN_NAME}.burn.img burn/
-          mv $diskimg output/images/${BASE_NAME}.img
+          mv "$diskimg" "output/images/${BASE_NAME}.img"
 
       - name: Compress & Hash
         run: |
@@ -183,7 +187,7 @@ jobs:
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.TAG }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
           append_body: true
           body: |
             ---
