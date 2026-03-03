@@ -1,28 +1,33 @@
 name: one
+
 on:
   workflow_dispatch:
   push:
     branches:
       - main
     paths:
-      - .github/workflows/one.yml
+      - .github/workflows/ci.yml
+
 env:
   SCRIPT_REPO: ${{ github.repository }}
   SCRIPT_REF: ${{ github.ref_name }}
   UBOOT_REPO: qxar86/onecloud-u-boot
   UBOOT_RELEASE: latest
   UBOOT_BURNIMG: eMMC.burn.img
-  ARMBIAN_REPO: hzyitc/armbian-onecloud
+  ARMBIAN_REPO: hzyitc/u-boot-onecloud
   ARMBIAN_REF: main
   PATCHES: ""  # 已移除 patch
+
 permissions:
   contents: write
+
 jobs:
   prepare:
     name: Prepare
     runs-on: ubuntu-22.04
     outputs:
       env: ${{ steps.get.outputs.env }}
+
     steps:
       - id: get
         name: Get repositories information
@@ -64,6 +69,7 @@ jobs:
               echo -e " ${C_BLUE}armbian/build${C_RESET}#${C_MAGENTA}${id}${C_RESET}"
             done < <(echo "${PATCHES}" | tr ',' '\n')
           fi
+
           cat <<EOF | sed -E 's/^ //' >> $GITHUB_STEP_SUMMARY
             # $(date -d "$TIME" +'%Y-%m-%d %H:%M:%S %Z(%:z)')
             ## Sources
@@ -100,6 +106,10 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: ${{ env.NAME }}
           body_path: Body.md
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: false          # 关键：防止无文件时报错
+          generate_release_notes: false
 
   build-debs:
     name: Build ${{ matrix.BRANCH }} kernel debs
@@ -112,11 +122,13 @@ jobs:
     steps:
       - name: Import env
         run: echo "${{ needs.prepare.outputs.env }}" | base64 -d >> $GITHUB_ENV
+
       - name: Checkout Armbian
         uses: actions/checkout@v4
         with:
           repository: ${{ env.ARMBIAN_REPO }}
           ref: ${{ env.ARMBIAN_SHA }}
+
       - name: Apply patches
         if: ${{ env.PATCHES != '' }}
         run: |
@@ -133,6 +145,7 @@ jobs:
             fi
           done
           echo "::endgroup::"
+
       - name: Build kernel debs
         run: |
           export GITHUB_ACTIONS=false
@@ -144,11 +157,13 @@ jobs:
               EXPERT=yes \
               USE_CCACHE=no
           sudo chown -R $(id -u):$(id -g) output/
+
       - name: Upload debs artifact
         uses: actions/upload-artifact@v4
         with:
           name: debs-${{ matrix.BRANCH }}
           path: output/debs/*
+
       - name: Upload debs to release
         uses: softprops/action-gh-release@v2
         with:
@@ -163,16 +178,18 @@ jobs:
       fail-fast: false
       matrix:
         BRANCH: [current, legacy]
-        RELEASE: [jammy, bookworm, noble, trixie]  # 添加 noble (Ubuntu 24.04) 和 trixie (Debian 13)
+        RELEASE: [jammy, bookworm, noble, trixie]
         TYPE: [minimal, cli]
     steps:
       - name: Import env
         run: echo "${{ needs.prepare.outputs.env }}" | base64 -d >> $GITHUB_ENV
+
       - name: Checkout Armbian
         uses: actions/checkout@v4
         with:
           repository: ${{ env.ARMBIAN_REPO }}
           ref: ${{ env.ARMBIAN_SHA }}
+
       - name: Apply patches
         if: ${{ env.PATCHES != '' }}
         run: |
@@ -189,11 +206,13 @@ jobs:
             fi
           done
           echo "::endgroup::"
+
       - name: Download kernel debs
         uses: actions/download-artifact@v4
         with:
           name: debs-${{ matrix.BRANCH }}
           path: output/debs/
+
       - name: Build image
         run: |
           export GITHUB_ACTIONS=false
@@ -221,6 +240,7 @@ jobs:
           tail -n 200 output/debug/kernel.log || true
           grep -i "error\|failed\|warning" output/debug/*.log || true
           echo "::endgroup::"
+
       - name: Install tools
         run: |
           sudo apt update
@@ -228,10 +248,12 @@ jobs:
           ver="v0.3.1"
           curl -L -o AmlImg "https://github.com/hzyitc/AmlImg/releases/download/$ver/AmlImg_${ver}_linux_amd64"
           chmod +x AmlImg
+
       - name: Download and unpack latest u-boot
         run: |
           curl -L -o uboot.img "https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}"
           ./AmlImg unpack ./uboot.img burn/
+
       - name: Extract boot/rootfs partitions
         run: |
           diskimg=$(ls -1 output/images/*.img | head -n1 || echo "No img found")
@@ -244,6 +266,7 @@ jobs:
             echo "No image generated, skipping extraction"
           fi
           sudo chown -R $(id -u):$(id -g) burn/
+
       - name: Generate burn image
         if: always()
         run: |
@@ -262,12 +285,14 @@ jobs:
           else
             echo "No simg files, skipping burn image generation"
           fi
+
       - name: Hash and compress images
         run: |
           sha256sum output/images/*.* > sha256sums.txt || true
           if [[ -f "${burnimg}" ]]; then
             xz -9 -T0 "${burnimg}" || true
           fi
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -276,6 +301,7 @@ jobs:
             output/images/*
             *.burn.img*
             sha256sums.txt
+
       - name: Append hashes to release body
         run: |
           cat <<EOF | tee -a Release.md
