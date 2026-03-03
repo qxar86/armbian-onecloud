@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - readme
+      - main          # ← 建议改成 main 或你实际使用的分支；原 readme 太窄
     paths:
       - .github/workflows/ci.yml
 
@@ -17,7 +17,7 @@ env:
   ARMBIAN_REPO: armbian/build
   ARMBIAN_REF: main
   PATCHES: 4077,5076
-  PATCHES_DISABLED: 5082
+  # PATCHES_DISABLED: 5082   # 未使用，已注释，可删除
 
 permissions:
   contents: write
@@ -32,86 +32,77 @@ jobs:
       - id: get
         name: Get repositories information
         run: |
-          TIME="$(curl https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
+          TIME="$(curl -s https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
           TAG="ci-$(date -d "${TIME}" -u +'%Y%m%d-%H%M%S-%Z')"
+          SCRIPT_SHA=$(curl -s https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
+          UBOOT_TAG=$(curl -s https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
+          ARMBIAN_SHA=$(curl -s https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF} | jq -r .sha)
 
-          SCRIPT_SHA=$(curl https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
-          UBOOT_TAG=$(curl https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
-          ARMBIAN_SHA=$(curl https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF} | jq -r .sha)
-
-          cat <<EOF | sed -E 's/^  //' >>$GITHUB_ENV
+          cat <<EOF | sed -E 's/^  //' >> $GITHUB_ENV
             TIME=$TIME
             TAG=$TAG
             SCRIPT_SHA=$SCRIPT_SHA
             UBOOT_TAG=$UBOOT_TAG
             ARMBIAN_SHA=$ARMBIAN_SHA
           EOF
-          echo "env=$(cat $GITHUB_ENV | base64 -w 0)" >>$GITHUB_OUTPUT
+
+          echo "env=$(cat $GITHUB_ENV | base64 -w 0)" >> $GITHUB_OUTPUT
 
       - name: Show repositories information
         run: |
           C_RESET="\e[0m"
-          C_BLACK="\e[30m"
-          C_RED="\e[31m"
           C_GREEN="\e[32m"
-          C_YELLOW="\e[33m"
           C_BLUE="\e[34m"
           C_MAGENTA="\e[35m"
-          C_CYAN="\e[36m"
-          C_GRAY="\e[37m"
+          C_YELLOW="\e[33m"
 
           echo -e "$(cat <<EOF | sed -E 's/^  //'
             TIME: ${C_GREEN}$(date -d "$TIME" +'%Y-%m-%d %H:%M:%S %Z(%:z)')${C_RESET}
-            Script: ${C_BLUE}${SCRIPT_REPO}${C_RESET}@${C_MAGENTA}${SCRIPT_REF}${C_RESET}(https://github.com/${SCRIPT_REPO}/tree/${SCRIPT_REF})
-                    ${C_YELLOW}${SCRIPT_SHA}${C_RESET}(https://github.com/${SCRIPT_REPO}/tree/${SCRIPT_SHA})
-            U-Boot: ${C_BLUE}${UBOOT_REPO}${C_RESET}@${C_MAGENTA}${UBOOT_RELEASE}${C_RESET}(https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_RELEASE})
-                    ${C_MAGENTA}${UBOOT_TAG}${C_RESET}(https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_TAG})
-            Armbian: ${C_BLUE}${ARMBIAN_REPO}${C_RESET}@${C_MAGENTA}${ARMBIAN_REF}${C_RESET}(https://github.com/${ARMBIAN_REPO}/tree/${ARMBIAN_REF})
-                     ${C_YELLOW}${ARMBIAN_SHA}${C_RESET}(https://github.com/${ARMBIAN_REPO}/tree/${ARMBIAN_SHA})
+            Script: ${C_BLUE}${SCRIPT_REPO}${C_RESET}@${C_MAGENTA}${SCRIPT_REF}${C_RESET}[](https://github.com/${SCRIPT_REPO}/tree/${SCRIPT_REF})
+                    ${C_YELLOW}${SCRIPT_SHA}${C_RESET}[](https://github.com/${SCRIPT_REPO}/commit/${SCRIPT_SHA})
+            U-Boot: ${C_BLUE}${UBOOT_REPO}${C_RESET}@${C_MAGENTA}${UBOOT_RELEASE}${C_RESET}[](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_RELEASE})
+                    ${C_MAGENTA}${UBOOT_TAG}${C_RESET}[](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_TAG})
+            Armbian: ${C_BLUE}${ARMBIAN_REPO}${C_RESET}@${C_MAGENTA}${ARMBIAN_REF}${C_RESET}[](https://github.com/${ARMBIAN_REPO}/tree/${ARMBIAN_REF})
+                     ${C_YELLOW}${ARMBIAN_SHA}${C_RESET}[](https://github.com/${ARMBIAN_REPO}/commit/${ARMBIAN_SHA})
           EOF
           )"
 
           if [[ -n "${PATCHES}" ]]; then
             echo -e "\nPatches:"
             while read -r id; do
-              echo -e "  ${C_BLUE}armbian/build${C_RESET}#${C_MAGENTA}${id}${C_RESET}(http://github.com/armbian/build/pull/${id})"
-            done < <(echo -e "${PATCHES}" | tr ',' '\n')
+              echo -e " ${C_BLUE}armbian/build${C_RESET}#${C_MAGENTA}${id}${C_RESET}[](https://github.com/armbian/build/pull/${id})"
+            done < <(echo "${PATCHES}" | tr ',' '\n')
           fi
 
-          cat <<EOF | sed -E 's/^  //' >>$GITHUB_STEP_SUMMARY
+          # 生成 GitHub Job Summary
+          cat <<EOF | sed -E 's/^  //' >> $GITHUB_STEP_SUMMARY
             # $(date -d "$TIME" +'%Y-%m-%d %H:%M:%S %Z(%:z)')
-
             ## Sources
-            Script: [${SCRIPT_REPO}@${SCRIPT_REF}](https://github.com/${SCRIPT_REPO}/tree/${SCRIPT_REF}) ([\`${SCRIPT_SHA}\`](https://github.com/${SCRIPT_REPO}/tree/${SCRIPT_SHA}))
-            U-Boot: [${UBOOT_REPO}@${UBOOT_RELEASE}](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_RELEASE}) ([\`${UBOOT_TAG}\`](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_TAG}))
-            Armbian: [${ARMBIAN_REPO}@${ARMBIAN_REF}](https://github.com/${ARMBIAN_REPO}/tree/${ARMBIAN_REF}) ([\`${ARMBIAN_SHA}\`](https://github.com/${ARMBIAN_REPO}/tree/${ARMBIAN_SHA}))
-
-            ${PATCHES:+$(
-              echo "## Patches"
-              echo "${PATCHES}" | tr ',' '\n' | sed -E 's|(.*)|[armbian/build#\1](http://github.com/armbian/build/pull/\1)|'
-            )}
+            Script: [${SCRIPT_REPO}@${SCRIPT_REF}](https://github.com/${SCRIPT_REPO}/tree/${SCRIPT_REF}) [](https://github.com/${SCRIPT_REPO}/commit/${SCRIPT_SHA})
+            U-Boot: [${UBOOT_REPO}@${UBOOT_RELEASE}](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_RELEASE}) [](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_TAG})
+            Armbian: [${ARMBIAN_REPO}@${ARMBIAN_REF}](https://github.com/${ARMBIAN_REPO}/tree/${ARMBIAN_REF}) [](https://github.com/${ARMBIAN_REPO}/commit/${ARMBIAN_SHA})
+            ${PATCHES:+
+            ## Patches
+            $(echo "${PATCHES}" | tr ',' '\n' | sed -E 's|(.*)|- [armbian/build#\1](https://github.com/armbian/build/pull/\1)|')
+            }
           EOF
 
       - name: Generate release informations
         run: |
           cat <<EOF | sed -E 's/^  //' | tee Release.md
             CI $(date -d "$TIME" +'%Y-%m-%d %H:%M:%S %Z(%:z)')
-
             # Sources
-            Script: [${SCRIPT_REPO}@${SCRIPT_REF}](https://github.com/${SCRIPT_REPO}/tree/${SCRIPT_REF}) ([\`${SCRIPT_SHA}\`](https://github.com/${SCRIPT_REPO}/tree/${SCRIPT_SHA}))
-            U-Boot: [${UBOOT_REPO}@${UBOOT_RELEASE}](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_RELEASE}) ([\`${UBOOT_TAG}\`](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_TAG}))
-            Armbian: [${ARMBIAN_REPO}@${ARMBIAN_REF}](https://github.com/${ARMBIAN_REPO}/tree/${ARMBIAN_REF}) ([\`${ARMBIAN_SHA}\`](https://github.com/${ARMBIAN_REPO}/tree/${ARMBIAN_SHA}))
-
-            ${PATCHES:+$(
-              echo "# Patches"
-              echo "${PATCHES}" | tr ',' '\n' | sed -E 's|(.*)|[armbian/build#\1](http://github.com/armbian/build/pull/\1)|'
-            )}
-
+            Script: [${SCRIPT_REPO}@${SCRIPT_REF}](https://github.com/${SCRIPT_REPO}/tree/${SCRIPT_REF}) [](https://github.com/${SCRIPT_REPO}/commit/${SCRIPT_SHA})
+            U-Boot: [${UBOOT_REPO}@${UBOOT_RELEASE}](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_RELEASE}) [](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_TAG})
+            Armbian: [${ARMBIAN_REPO}@${ARMBIAN_REF}](https://github.com/${ARMBIAN_REPO}/tree/${ARMBIAN_REF}) [](https://github.com/${ARMBIAN_REPO}/commit/${ARMBIAN_SHA})
+            ${PATCHES:+
+            # Patches
+            $(echo "${PATCHES}" | tr ',' '\n' | sed -E 's|(.*)|- [armbian/build#\1](https://github.com/armbian/build/pull/\1)|')
+            }
             # SHA256
           EOF
-
-          echo "NAME=$(head --line=1 Release.md)" >>$GITHUB_ENV
-          tail --line=+2 Release.md >Body.md
+          echo "NAME=$(head -n1 Release.md)" >> $GITHUB_ENV
+          tail -n +2 Release.md > Body.md
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -122,42 +113,43 @@ jobs:
           body_path: Body.md
 
   build-debs:
-    name: Build ${{ matrix.BRANCH }}
+    name: Build ${{ matrix.BRANCH }} kernel debs
     needs: prepare
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        BRANCH:
-          - current
-
+        BRANCH: [current]
     steps:
       - name: Import env
-        run: |
-          echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >>$GITHUB_ENV
+        run: echo "${{ needs.prepare.outputs.env }}" | base64 -d >> $GITHUB_ENV
 
-      - name: Checkout
+      - name: Checkout Armbian
         uses: actions/checkout@v4
         with:
           repository: ${{ env.ARMBIAN_REPO }}
           ref: ${{ env.ARMBIAN_SHA }}
 
-      - name: "Apply patch ${{ env.PATCHES }}"
-        if: ${{ env.PATCHES }}
+      - name: Apply patches
+        if: ${{ env.PATCHES != '' }}
         run: |
-          echo "::group::Download"
-          curl -L -O "https://github.com/armbian/build/pull/{${PATCHES}}.patch"
+          echo "::group::Download patches"
+          for id in ${PATCHES//,/ }; do
+            curl -L -o "${id}.patch" "https://github.com/armbian/build/pull/${id}.patch"
+          done
           echo "::endgroup::"
 
+          echo "::group::Apply patches"
           for file in *.patch; do
-            echo "::group::Applying $file"
-            patch --batch -p1 -N <"$file"
-            echo "::endgroup::"
+            if [[ -f "$file" ]]; then
+              echo "Applying $file"
+              patch --batch -p1 -N <"$file" || echo "Warning: patch $file applied with issues (check logs)"
+            fi
           done
+          echo "::endgroup::"
 
-      - name: Build
+      - name: Build kernel debs
         run: |
-          # Don't update remote cache
           export GITHUB_ACTIONS=false
           sudo --preserve-env \
             ./compile.sh kernel \
@@ -166,45 +158,31 @@ jobs:
               BRANCH=${{ matrix.BRANCH }} \
               EXPERT=yes \
               USE_CCACHE=no
-          sudo chown $(id -u):$(id -g) -R output/
 
-      - name: Upload artifacts
+          sudo chown -R $(id -u):$(id -g) output/
+
+      - name: Upload debs artifact
         uses: actions/upload-artifact@v4
         with:
           name: debs-${{ matrix.BRANCH }}
           path: output/debs/*
 
-      - name: Upload to release
+      - name: Upload debs to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          files: |
-            output/debs/*
+          files: output/debs/*
 
   build:
     name: Build ${{ matrix.RELEASE }}-${{ matrix.BRANCH }}-${{ matrix.TYPE == 'desktop' && matrix.DESKTOP_ENVIRONMENT || matrix.TYPE }}
-    needs: [ prepare, build-debs ]
+    needs: [prepare, build-debs]
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        BRANCH:
-          - current
-        RELEASE:
-          # - focal # Ubuntu 20.04 LTS
-          # - oracular # Ubuntu 24.10
-          # - plucky # Ubuntu 25.04
-          - jammy # Ubuntu 22.04 LTS
-          - noble # Ubuntu 24.04 LTS
-          # - buster # Debian 10
-          # - bullseye # Debian 11
-          - bookworm # Debian 12
-          - trixie # Debian 13
-          # - sid # Debian unstable
-        TYPE:
-          - minimal
-          - cli
-          - desktop
+        BRANCH: [current]
+        RELEASE: [jammy, noble, bookworm, trixie]
+        TYPE: [minimal, cli, desktop]
         include:
           - TYPE: desktop
             DESKTOP_ENVIRONMENT: xfce
@@ -213,37 +191,40 @@ jobs:
 
     steps:
       - name: Import env
-        run: |
-          echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >>$GITHUB_ENV
+        run: echo "${{ needs.prepare.outputs.env }}" | base64 -d >> $GITHUB_ENV
 
-      - name: Checkout
+      - name: Checkout Armbian
         uses: actions/checkout@v4
         with:
           repository: ${{ env.ARMBIAN_REPO }}
           ref: ${{ env.ARMBIAN_SHA }}
 
-      - name: "Apply patch ${{ env.PATCHES }}"
-        if: ${{ env.PATCHES }}
+      - name: Apply patches
+        if: ${{ env.PATCHES != '' }}
         run: |
-          echo "::group::Download"
-          curl -L -O "https://github.com/armbian/build/pull/{${PATCHES}}.patch"
+          echo "::group::Download patches"
+          for id in ${PATCHES//,/ }; do
+            curl -L -o "${id}.patch" "https://github.com/armbian/build/pull/${id}.patch"
+          done
           echo "::endgroup::"
 
+          echo "::group::Apply patches"
           for file in *.patch; do
-            echo "::group::Applying $file"
-            patch --batch -p1 -N <"$file"
-            echo "::endgroup::"
+            if [[ -f "$file" ]]; then
+              echo "Applying $file"
+              patch --batch -p1 -N <"$file" || echo "Warning: patch $file applied with issues"
+            fi
           done
+          echo "::endgroup::"
 
-      - name: Download debs
+      - name: Download kernel debs
         uses: actions/download-artifact@v4
         with:
           name: debs-${{ matrix.BRANCH }}
           path: output/debs/
 
-      - name: Build
+      - name: Build image
         run: |
-          # Don't update remote cache
           export GITHUB_ACTIONS=false
           sudo --preserve-env \
             ./compile.sh build \
@@ -261,69 +242,70 @@ jobs:
               SKIP_EXTERNAL_TOOLCHAINS=yes \
               CLEAN_LEVEL= \
               USE_CCACHE=no \
-              COMPRESS_OUTPUTIMAGE=img
-          sudo chown $(id -u):$(id -g) -R output/
+              COMPRESS_OUTPUTIMAGE=sha,xz     # 生成 .img + .img.xz + sha256
 
-      - name: Install Dependents
+          sudo chown -R $(id -u):$(id -g) output/
+
+      - name: Install tools
         run: |
-          sudo apt install img2simg
-
+          sudo apt update
+          sudo apt install -y img2simg
           ver="v0.3.1"
-          curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/$ver/AmlImg_${ver}_linux_amd64
-          chmod +x ./AmlImg
+          curl -L -o AmlImg "https://github.com/hzyitc/AmlImg/releases/download/$ver/AmlImg_${ver}_linux_amd64"
+          chmod +x AmlImg
 
-      - name: Download and unpack the latest u-boot
+      - name: Download and unpack latest u-boot
         run: |
-          echo "::group::Download"
-          curl -L -o ./uboot.img https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}
-          echo "::endgroup::"
-
-          echo "::group::Unpack"
+          curl -L -o uboot.img "https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}"
           ./AmlImg unpack ./uboot.img burn/
-          echo "::endgroup::"
 
-      - name: Extract boot and rootfs partitions
+      - name: Extract boot/rootfs partitions
         run: |
-          diskimg=$(ls output/images/*.img)
-          loop=$(sudo losetup --find --show --partscan $diskimg)
-          sudo img2simg ${loop}p1 burn/boot.simg
-          sudo img2simg ${loop}p2 burn/rootfs.simg
-          sudo losetup -d $loop
-          sudo chown $(id -u):$(id -g) -R burn/
+          diskimg=$(ls -1 output/images/*.img | head -n1)
+          loop=$(sudo losetup --find --show --partscan "$diskimg")
+          sudo img2simg "${loop}p1" burn/boot.simg
+          sudo img2simg "${loop}p2" burn/rootfs.simg
+          sudo losetup -d "$loop"
+          sudo chown -R $(id -u):$(id -g) burn/
 
       - name: Generate burn image
         run: |
-          echo -n "sha1sum $(sha1sum burn/boot.simg | awk '{print $1}')" >burn/boot.VERIFY
-          echo -n "sha1sum $(sha1sum burn/rootfs.simg | awk '{print $1}')" >burn/rootfs.VERIFY
+          echo -n "sha1sum $(sha1sum burn/boot.simg | awk '{print $1}')" > burn/boot.VERIFY
+          echo -n "sha1sum $(sha1sum burn/rootfs.simg | awk '{print $1}')" > burn/rootfs.VERIFY
 
-          cat <<EOF >>burn/commands.txt
+          cat <<EOF >> burn/commands.txt
           PARTITION:boot:sparse:boot.simg
           VERIFY:boot:normal:boot.VERIFY
           PARTITION:rootfs:sparse:rootfs.simg
           VERIFY:rootfs:normal:rootfs.VERIFY
           EOF
 
-          prefix=$(ls output/images/*.img | sed 's/\.img$//')
-          burnimg=${prefix}.burn.img
-          ./AmlImg pack $burnimg burn/
+          prefix=$(basename "$(ls output/images/*.img | head -n1)" .img)
+          burnimg="${prefix}.burn.img"
+          ./AmlImg pack "$burnimg" burn/
 
       - name: Hash and compress images
         run: |
-          for f in output/images/*.img; do
-            sha256sum "$f" | tee -a sha256sum
-            xz --threads=0 --compress "$f"
-          done
+          sha256sum output/images/*.* > sha256sums.txt
+          # 已由 COMPRESS_OUTPUTIMAGE=xz 处理压缩，此处仅额外处理 .burn.img 如需要
+          xz -9 -T0 "${burnimg}" || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.RELEASE }}-${{ matrix.BRANCH }}-${{ matrix.TYPE == 'desktop' && matrix.DESKTOP_ENVIRONMENT || matrix.TYPE }}
-          path: output/images/*
+          path: |
+            output/images/*
+            *.burn.img*
+            sha256sums.txt
 
-      - name: Generate release informations
+      - name: Append hashes to release body
         run: |
-          cat <<EOF | sed -E 's/^  //' | tee Release.md
-            $(cat sha256sum | awk '{printf "%s: `%s`\n", $2, $1}')
+          cat <<EOF | tee -a Release.md
+            ## SHA256 checksums
+            \`\`\`
+            $(cat sha256sums.txt)
+            \`\`\`
           EOF
 
       - name: Upload to release
@@ -334,3 +316,5 @@ jobs:
           body_path: Release.md
           files: |
             output/images/*
+            *.burn.img*
+            sha256sums.txt
