@@ -32,60 +32,38 @@ jobs:
       - id: get
         name: Get repositories information
         run: |
-          # 获取运行时间并生成 Tag
           TIME="$(curl -s https://api.github.com/repos/${SCRIPT_REPO}/actions/runs/${GITHUB_RUN_ID} | jq -r .created_at)"
           TAG="ci-$(date -d "${TIME}" -u +'%Y%m%d-%H%M%S-%Z')"
-
-          # 获取各仓库 SHA
           SCRIPT_SHA=$(curl -s https://api.github.com/repos/${SCRIPT_REPO}/commits/${SCRIPT_REF} | jq -r .sha)
           UBOOT_TAG=$(curl -s https://api.github.com/repos/${UBOOT_REPO}/releases/${UBOOT_RELEASE} | jq -r .tag_name)
           ARMBIAN_SHA=$(curl -s https://api.github.com/repos/${ARMBIAN_REPO}/commits/${ARMBIAN_REF} | jq -r .sha)
 
-          # 写入环境变量文件
           cat <<EOF >>$GITHUB_ENV
-TIME=$TIME
-TAG=$TAG
-SCRIPT_SHA=$SCRIPT_SHA
-UBOOT_TAG=$UBOOT_TAG
-ARMBIAN_SHA=$ARMBIAN_SHA
-EOF
-          # Base64 编码后输出给后续 Job 使用
-          echo "env=$(cat $GITHUB_ENV | base64 -w 0)" >>$GITHUB_OUTPUT
-
-      - name: Generate release informations
-        run: |
-          cat <<EOF | tee Release.md
-          CI $(date -d "$TIME" +'%Y-%m-%d %H:%M:%S %Z(%:z)')
-
-          # Sources
-          Script: [${SCRIPT_REPO}@${SCRIPT_REF}](https://github.com/${SCRIPT_REPO}/tree/${SCRIPT_REF}) ([\`${SCRIPT_SHA}\`](https://github.com/${SCRIPT_REPO}/tree/${SCRIPT_SHA}))
-          U-Boot: [${UBOOT_REPO}@${UBOOT_RELEASE}](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_RELEASE}) ([\`${UBOOT_TAG}\`](https://github.com/${UBOOT_REPO}/releases/tag/${UBOOT_TAG}))
-          Armbian: [${ARMBIAN_REPO}@${ARMBIAN_REF}](https://github.com/${ARMBIAN_REPO}/tree/${ARMBIAN_REF}) ([\`${ARMBIAN_SHA}\`](https://github.com/${ARMBIAN_REPO}/tree/${ARMBIAN_SHA}))
+          TIME=$TIME
+          TAG=$TAG
+          SCRIPT_SHA=$SCRIPT_SHA
+          UBOOT_TAG=$UBOOT_TAG
+          ARMBIAN_SHA=$ARMBIAN_SHA
           EOF
-
-          echo "NAME=$(head -n 1 Release.md)" >>$GITHUB_ENV
-          tail -n +2 Release.md > Body.md
+          echo "env=$(cat $GITHUB_ENV | base64 -w 0)" >>$GITHUB_OUTPUT
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          target_commitish: ${{ github.sha }}
-          name: ${{ env.NAME }}
-          body_path: Body.md
+          name: CI ${{ env.TAG }}
+          body: |
+            Build info:
+            Armbian: ${{ env.ARMBIAN_SHA }}
+            Patches: ${{ env.PATCHES }}
 
   build-debs:
     name: Build Kernel
     needs: prepare
     runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        BRANCH: [current]
     steps:
       - name: Import env
-        run: |
-          echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >>$GITHUB_ENV
+        run: echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >>$GITHUB_ENV
 
       - name: Checkout Armbian
         uses: actions/checkout@v4
@@ -94,13 +72,12 @@ EOF
           ref: ${{ env.ARMBIAN_SHA }}
 
       - name: Apply Patches
-        if: env.PATCHES != ''
+        if: ${{ env.PATCHES != '' }}
+        shell: bash
         run: |
           echo "::group::Download Patches"
-          # 使用 IFS 拆分字符串，避免 YAML 语法解析冲突
-          IFS=',' read -ra ADDR <<< "$PATCHES"
-          for id in "${ADDR[@]}"; do
-            echo "Downloading PR #$id patch..."
+          for id in $(echo $PATCHES | tr ',' ' '); do
+            echo "Downloading PR #$id..."
             curl -fsSL "https://github.com/armbian/build/pull/${id}.patch" -o "${id}.patch" || exit 1
           done
           echo "::endgroup::"
@@ -117,24 +94,14 @@ EOF
         run: |
           export GITHUB_ACTIONS=false
           sudo --preserve-env ./compile.sh kernel \
-            ALLOW_ROOT=yes \
-            BOARD=onecloud \
-            BRANCH=${{ matrix.BRANCH }} \
-            EXPERT=yes \
-            USE_CCACHE=no
+            ALLOW_ROOT=yes BOARD=onecloud BRANCH=current EXPERT=yes USE_CCACHE=no
           sudo chown $(id -u):$(id -g) -R output/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: debs-${{ matrix.BRANCH }}
+          name: debs-current
           path: output/debs/*
-
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          files: output/debs/*
 
   build:
     name: Build Image (${{ matrix.RELEASE }}-${{ matrix.TYPE }})
@@ -143,13 +110,11 @@ EOF
     strategy:
       fail-fast: false
       matrix:
-        BRANCH: [current]
         RELEASE: [jammy, noble, bookworm, trixie]
         TYPE: [minimal, cli]
     steps:
       - name: Import env
-        run: |
-          echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >>$GITHUB_ENV
+        run: echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >>$GITHUB_ENV
 
       - name: Checkout Armbian
         uses: actions/checkout@v4
@@ -158,10 +123,10 @@ EOF
           ref: ${{ env.ARMBIAN_SHA }}
 
       - name: Apply Patches
-        if: env.PATCHES != ''
+        if: ${{ env.PATCHES != '' }}
+        shell: bash
         run: |
-          IFS=',' read -ra ADDR <<< "$PATCHES"
-          for id in "${ADDR[@]}"; do
+          for id in $(echo $PATCHES | tr ',' ' '); do
             curl -fsSL "https://github.com/armbian/build/pull/${id}.patch" -o "${id}.patch"
           done
           for file in *.patch; do
@@ -171,74 +136,37 @@ EOF
       - name: Download debs
         uses: actions/download-artifact@v4
         with:
-          name: debs-${{ matrix.BRANCH }}
+          name: debs-current
           path: output/debs/
 
       - name: Build OS Image
         run: |
           export GITHUB_ACTIONS=false
           sudo --preserve-env ./compile.sh build \
-            ALLOW_ROOT=yes \
-            BOARD=onecloud \
-            BRANCH=${{ matrix.BRANCH }} \
-            RELEASE=${{ matrix.RELEASE }} \
-            KERNEL_CONFIGURE=no \
-            BUILD_MINIMAL=${{ matrix.TYPE == 'minimal' && 'yes' || 'no' }} \
-            BUILD_DESKTOP=no \
-            EXPERT=yes \
-            SKIP_EXTERNAL_TOOLCHAINS=yes \
-            CLEAN_LEVEL= \
-            USE_CCACHE=no \
-            COMPRESS_OUTPUTIMAGE=img
+            ALLOW_ROOT=yes BOARD=onecloud BRANCH=current RELEASE=${{ matrix.RELEASE }} \
+            KERNEL_CONFIGURE=no BUILD_MINIMAL=${{ matrix.TYPE == 'minimal' && 'yes' || 'no' }} \
+            BUILD_DESKTOP=no EXPERT=yes SKIP_EXTERNAL_TOOLCHAINS=yes USE_CCACHE=no COMPRESS_OUTPUTIMAGE=img
           sudo chown $(id -u):$(id -g) -R output/
 
       - name: Generate Burn Image
         run: |
           sudo apt update && sudo apt install img2simg -y
-          
-          # 下载工具
-          ver="v0.3.1"
-          curl -fsSL -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/$ver/AmlImg_${ver}_linux_amd64
+          curl -fsSL -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64
           chmod +x ./AmlImg
-
-          # 获取 U-Boot
           curl -fsSL -o ./uboot.img https://github.com/${UBOOT_REPO}/releases/download/${UBOOT_TAG}/${UBOOT_BURNIMG}
           ./AmlImg unpack ./uboot.img burn/
-
-          # 提取分区并制作刷机包
           diskimg=$(ls output/images/*.img)
           loop=$(sudo losetup --find --show --partscan $diskimg)
           sudo img2simg ${loop}p1 burn/boot.simg
           sudo img2simg ${loop}p2 burn/rootfs.simg
           sudo losetup -d $loop
-          sudo chown $(id -u):$(id -g) -R burn/
-
-          echo -n "sha1sum $(sha1sum burn/boot.simg | awk '{print $1}')" >burn/boot.VERIFY
-          echo -n "sha1sum $(sha1sum burn/rootfs.simg | awk '{print $1}')" >burn/rootfs.VERIFY
-
-          cat <<EOF >>burn/commands.txt
-          PARTITION:boot:sparse:boot.simg
-          VERIFY:boot:normal:boot.VERIFY
-          PARTITION:rootfs:sparse:rootfs.simg
-          VERIFY:rootfs:normal:rootfs.VERIFY
-          EOF
-
-          prefix=$(ls output/images/*.img | sed 's/\.img$//')
-          ./AmlImg pack ${prefix}.burn.img burn/
-
-      - name: Hash and compress
-        run: |
-          cd output/images/
-          for f in *.img; do
-            sha256sum "$f" | tee -a ../../sha256sum
-            xz -T0 "$f"
-          done
+          ./AmlImg pack ${diskimg%.img}.burn.img burn/
+          xz -T0 output/images/*.img
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          append_body: true
           files: |
             output/images/*.burn.img
             output/images/*.xz
