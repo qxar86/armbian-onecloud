@@ -137,8 +137,7 @@ jobs:
           mkdir -p .ccache
           ./compile.sh kernel \
             ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} \
-            EXPERT=yes USE_CCACHE=yes CCACHE_DIR="$(pwd)/.ccache" SKIP_INIT_BINFMTS=yes \
-            DOCKER_ARMBIAN_BASE_IMAGE=ubuntu:22.04
+            EXPERT=yes USE_CCACHE=yes CCACHE_DIR="$(pwd)/.ccache" SKIP_INIT_BINFMTS=yes
           sudo chown "$(id -u):$(id -g)" -R output/
           sudo chown "$(id -u):$(id -g)" -R .ccache
 
@@ -205,8 +204,7 @@ jobs:
             KERNEL_CONFIGURE=no EXPERT=yes SKIP_EXTERNAL_TOOLCHAINS=yes USE_CCACHE=no \
             SKIP_INIT_BINFMTS=yes \
             BUILD_MINIMAL=${{ matrix.TYPE == 'minimal' && 'yes' || 'no' }} \
-            BUILD_DESKTOP=no COMPRESS_OUTPUTIMAGE=img \
-            DOCKER_ARMBIAN_BASE_IMAGE=ubuntu:22.04
+            BUILD_DESKTOP=no COMPRESS_OUTPUTIMAGE=img
           sudo chown "$(id -u):$(id -g)" -R output/
 
       - name: Post Process & Rename
