@@ -127,14 +127,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ccache-${{ matrix.BRANCH }}-
 
+      - name: Check Docker
+        run: docker --version
+
       - name: Build Kernel
         run: |
           set -euo pipefail
           export GITHUB_ACTIONS=false
           mkdir -p .ccache
-          sudo --preserve-env ./compile.sh kernel \
+          ./compile.sh kernel \
             ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} \
-            EXPERT=yes USE_CCACHE=yes CCACHE_DIR="$(pwd)/.ccache" SKIP_INIT_BINFMTS=yes
+            EXPERT=yes USE_CCACHE=yes CCACHE_DIR="$(pwd)/.ccache" SKIP_INIT_BINFMTS=yes \
+            DOCKER_ARMBIAN_BASE_IMAGE=ubuntu:22.04
           sudo chown "$(id -u):$(id -g)" -R output/
           sudo chown "$(id -u):$(id -g)" -R .ccache
 
@@ -189,16 +193,20 @@ jobs:
           name: debs-${{ matrix.BRANCH }}
           path: output/debs/
 
+      - name: Check Docker
+        run: docker --version
+
       - name: Build OS Image
         run: |
           set -euo pipefail
           export GITHUB_ACTIONS=false
-          sudo --preserve-env ./compile.sh build \
+          ./compile.sh build \
             ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} RELEASE=${{ matrix.RELEASE }} \
             KERNEL_CONFIGURE=no EXPERT=yes SKIP_EXTERNAL_TOOLCHAINS=yes USE_CCACHE=no \
             SKIP_INIT_BINFMTS=yes \
             BUILD_MINIMAL=${{ matrix.TYPE == 'minimal' && 'yes' || 'no' }} \
-            BUILD_DESKTOP=no COMPRESS_OUTPUTIMAGE=img
+            BUILD_DESKTOP=no COMPRESS_OUTPUTIMAGE=img \
+            DOCKER_ARMBIAN_BASE_IMAGE=ubuntu:22.04
           sudo chown "$(id -u):$(id -g)" -R output/
 
       - name: Post Process & Rename
