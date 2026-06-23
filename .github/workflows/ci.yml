@@ -25,7 +25,7 @@ permissions:
 jobs:
   prepare:
     name: Prepare
-    runs-on: ubuntu-24.04  # 核心修复：升级到24.04
+    runs-on: ubuntu-24.04
     outputs:
       env: ${{ steps.get.outputs.env }}
       tag: ${{ steps.get.outputs.tag }}
@@ -67,7 +67,7 @@ jobs:
   build-debs:
     name: Build Kernel
     needs: prepare
-    runs-on: ubuntu-24.04  # 核心修复：升级到24.04
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         BRANCH: [current]
@@ -75,7 +75,7 @@ jobs:
       - name: Import env
         run: echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >> $GITHUB_ENV
 
-      - name: GitHub Actions 24.04专属apt极速优化
+      - name: Ubuntu 24.04专属依赖修复与极速优化
         run: |
           # 1. 清理所有apt锁和缓存
           sudo rm -rf /var/lib/apt/lists/* /var/lib/dpkg/lock* /var/cache/apt/archives/*
@@ -85,9 +85,10 @@ jobs:
           sudo sed -i 's/archive.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list
           sudo sed -i 's/security.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list
           
-          # 3. 启用所有必要仓库
+          # 3. 启用所有必要仓库 + 添加Python 2 PPA
           sudo add-apt-repository -y universe
           sudo add-apt-repository -y multiverse
+          sudo add-apt-repository -y ppa:deadsnakes/ppa  # 提供Python 2.7
           
           # 4. 强制IPv4+多线程下载
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
@@ -97,16 +98,21 @@ jobs:
           sudo apt clean
           sudo apt update --fix-missing -y
           
-          # 6. 预安装Armbian完整依赖（包含缺失的两个包）
+          # 6. 预安装Armbian完整依赖（适配24.04）
           sudo apt install -y --no-install-recommends \
-            colorized-logs axel rdfind binwalk libgnutls28-dev python2 python2-dev \
-            libc6-amd64-cross python3-pyelftools python3-libfdt systemd-ukify \
-            build-essential git curl wget unzip zip xz-utils libssl-dev libelf-dev \
-            bc bison flex python3 python3-pip device-tree-compiler \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf qemu-user-static \
-            debootstrap binfmt-support img2simg
+            colorized-logs axel rdfind binwalk libgnutls28-dev \
+            python2.7 python2.7-dev libc6-amd64-cross python3-pyelftools \
+            python3-libfdt systemd-ukify build-essential git curl wget \
+            unzip zip xz-utils libssl-dev libelf-dev bc bison flex \
+            python3 python3-pip device-tree-compiler gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabihf qemu-user-static debootstrap \
+            binfmt-support android-sdk-libsparse-utils  # 替代img2simg
           
-          # 7. 释放磁盘空间
+          # 7. 创建python2软链接（Armbian脚本需要）
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python
+          
+          # 8. 释放磁盘空间
           sudo apt autoremove -y --purge
           docker system prune -f
 
@@ -114,9 +120,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-2404-${{ hashFiles('/etc/apt/sources.list') }}
+          key: ${{ runner.os }}-apt-2404-v2-${{ hashFiles('/etc/apt/sources.list') }}
           restore-keys: |
-            ${{ runner.os }}-apt-2404-
+            ${{ runner.os }}-apt-2404-v2-
 
       - name: Checkout Armbian
         uses: actions/checkout@v4
@@ -157,7 +163,7 @@ jobs:
           sudo --preserve-env ./compile.sh kernel \
             ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} \
             EXPERT=yes USE_CCACHE=yes CCACHE_DIR=$(pwd)/.ccache \
-            SKIP_INIT_BINFMTS=yes SKIP_APT_UPDATE=yes  # 跳过内部apt更新
+            SKIP_INIT_BINFMTS=yes SKIP_APT_UPDATE=yes
           sudo chown $(id -u):$(id -g) -R output/
           sudo chown $(id -u):$(id -g) -R .ccache
 
@@ -171,7 +177,7 @@ jobs:
   build:
     name: Build ${{ matrix.RELEASE }}-${{ matrix.TYPE }}
     needs: [ prepare, build-debs ]
-    runs-on: ubuntu-24.04  # 核心修复：升级到24.04
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -182,7 +188,7 @@ jobs:
       - name: Import env
         run: echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >> $GITHUB_ENV
 
-      - name: GitHub Actions 24.04专属apt极速优化
+      - name: Ubuntu 24.04专属依赖修复与极速优化
         run: |
           sudo rm -rf /var/lib/apt/lists/* /var/lib/dpkg/lock* /var/cache/apt/archives/*
           sudo dpkg --configure -a
@@ -190,10 +196,15 @@ jobs:
           sudo sed -i 's/security.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list
           sudo add-apt-repository -y universe
           sudo add-apt-repository -y multiverse
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
           echo 'Acquire::http::Pipeline-Depth "16";' | sudo tee /etc/apt/apt.conf.d/99pipeline
           sudo apt clean
           sudo apt update --fix-missing -y
+          sudo apt install -y --no-install-recommends \
+            android-sdk-libsparse-utils python2.7 python2.7-dev
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python
           sudo apt autoremove -y --purge
           docker system prune -f
 
@@ -201,9 +212,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-2404-${{ hashFiles('/etc/apt/sources.list') }}
+          key: ${{ runner.os }}-apt-2404-v2-${{ hashFiles('/etc/apt/sources.list') }}
           restore-keys: |
-            ${{ runner.os }}-apt-2404-
+            ${{ runner.os }}-apt-2404-v2-
 
       - name: Checkout Armbian
         uses: actions/checkout@v4
@@ -249,7 +260,7 @@ jobs:
       - name: Post Process & Rename
         id: postprocess
         run: |
-          # 24.04已预安装img2simg，无需再apt安装
+          # 已预安装android-sdk-libsparse-utils，包含img2simg
           curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64 && chmod +x ./AmlImg
           
           DEB_FILE=$(ls output/debs/linux-image-*__*.deb 2>/dev/null | head -n 1)
@@ -296,8 +307,8 @@ jobs:
           [ -z "$diskimg" ] && { echo "::error::No .img found"; exit 1; }
           
           loop=$(sudo losetup --find --show --partscan "$diskimg")
-          sudo img2simg "${loop}p1" burn/boot.simg
-          sudo img2simg "${loop}p2" burn/rootfs.simg
+          img2simg "${loop}p1" burn/boot.simg
+          img2simg "${loop}p2" burn/rootfs.simg
           sudo losetup -d "$loop"
           
           echo -n "sha1sum $(sha1sum burn/boot.simg | awk '{print $1}')" > burn/boot.VERIFY
