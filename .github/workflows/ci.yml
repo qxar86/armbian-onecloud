@@ -25,7 +25,7 @@ permissions:
 jobs:
   prepare:
     name: Prepare
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04  # 降级到22.04，原生支持Python 2.7
     outputs:
       env: ${{ steps.get.outputs.env }}
       tag: ${{ steps.get.outputs.tag }}
@@ -67,7 +67,7 @@ jobs:
   build-debs:
     name: Build Kernel
     needs: prepare
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04  # 降级到22.04
     strategy:
       matrix:
         BRANCH: [current]
@@ -75,7 +75,7 @@ jobs:
       - name: Import env
         run: echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >> $GITHUB_ENV
 
-      - name: Ubuntu 24.04专属依赖修复与极速优化
+      - name: Ubuntu 22.04专属依赖修复与极速优化
         run: |
           # 1. 清理所有apt锁和缓存
           sudo rm -rf /var/lib/apt/lists/* /var/lib/dpkg/lock* /var/cache/apt/archives/*
@@ -85,10 +85,9 @@ jobs:
           sudo sed -i 's/archive.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list
           sudo sed -i 's/security.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list
           
-          # 3. 启用所有必要仓库 + 添加Python 2 PPA
+          # 3. 启用所有必要仓库
           sudo add-apt-repository -y universe
           sudo add-apt-repository -y multiverse
-          sudo add-apt-repository -y ppa:deadsnakes/ppa  # 提供Python 2.7
           
           # 4. 强制IPv4+多线程下载
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
@@ -98,19 +97,27 @@ jobs:
           sudo apt clean
           sudo apt update --fix-missing -y
           
-          # 6. 预安装Armbian完整依赖（适配24.04）
+          # 6. 预安装Armbian完整依赖（适配22.04）
           sudo apt install -y --no-install-recommends \
             colorized-logs axel rdfind binwalk libgnutls28-dev \
-            python2.7 python2.7-dev libc6-amd64-cross python3-pyelftools \
-            python3-libfdt systemd-ukify build-essential git curl wget \
-            unzip zip xz-utils libssl-dev libelf-dev bc bison flex \
-            python3 python3-pip device-tree-compiler gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabihf qemu-user-static debootstrap \
-            binfmt-support android-sdk-libsparse-utils  # 替代img2simg
+            python2 python2-dev libc6-amd64-cross python3-pyelftools \
+            build-essential git curl wget unzip zip xz-utils libssl-dev \
+            libelf-dev bc bison flex python3 python3-pip device-tree-compiler \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf qemu-user-static \
+            debootstrap binfmt-support android-sdk-libsparse-utils
           
-          # 7. 创建python2软链接（Armbian脚本需要）
-          sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
-          sudo ln -sf /usr/bin/python2.7 /usr/bin/python
+          # 7. 手动安装缺失的两个依赖（22.04没有的包）
+          # 7.1 安装python3-libfdt的替代包
+          sudo apt install -y python3-dtc
+          
+          # 7.2 手动编译安装systemd-ukify（从systemd v255源码）
+          sudo apt install -y meson ninja-build libsystemd-dev
+          git clone https://github.com/systemd/systemd.git --depth 1 --branch v255
+          cd systemd
+          meson setup build -Dukify=true -Dtests=false
+          ninja -C build ukify
+          sudo cp build/ukify /usr/bin/systemd-ukify
+          cd .. && rm -rf systemd
           
           # 8. 释放磁盘空间
           sudo apt autoremove -y --purge
@@ -120,9 +127,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-2404-v2-${{ hashFiles('/etc/apt/sources.list') }}
+          key: ${{ runner.os }}-apt-2204-v3-${{ hashFiles('/etc/apt/sources.list') }}
           restore-keys: |
-            ${{ runner.os }}-apt-2404-v2-
+            ${{ runner.os }}-apt-2204-v3-
+
+      - name: Cache systemd-ukify
+        uses: actions/cache@v4
+        with:
+          path: /usr/bin/systemd-ukify
+          key: ${{ runner.os }}-systemd-ukify-v255
 
       - name: Checkout Armbian
         uses: actions/checkout@v4
@@ -177,7 +190,7 @@ jobs:
   build:
     name: Build ${{ matrix.RELEASE }}-${{ matrix.TYPE }}
     needs: [ prepare, build-debs ]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04  # 降级到22.04
     strategy:
       fail-fast: false
       matrix:
@@ -188,7 +201,7 @@ jobs:
       - name: Import env
         run: echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >> $GITHUB_ENV
 
-      - name: Ubuntu 24.04专属依赖修复与极速优化
+      - name: Ubuntu 22.04专属依赖修复与极速优化
         run: |
           sudo rm -rf /var/lib/apt/lists/* /var/lib/dpkg/lock* /var/cache/apt/archives/*
           sudo dpkg --configure -a
@@ -196,15 +209,12 @@ jobs:
           sudo sed -i 's/security.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list
           sudo add-apt-repository -y universe
           sudo add-apt-repository -y multiverse
-          sudo add-apt-repository -y ppa:deadsnakes/ppa
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
           echo 'Acquire::http::Pipeline-Depth "16";' | sudo tee /etc/apt/apt.conf.d/99pipeline
           sudo apt clean
           sudo apt update --fix-missing -y
           sudo apt install -y --no-install-recommends \
-            android-sdk-libsparse-utils python2.7 python2.7-dev
-          sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
-          sudo ln -sf /usr/bin/python2.7 /usr/bin/python
+            python2 python2-dev android-sdk-libsparse-utils python3-dtc
           sudo apt autoremove -y --purge
           docker system prune -f
 
@@ -212,9 +222,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-2404-v2-${{ hashFiles('/etc/apt/sources.list') }}
+          key: ${{ runner.os }}-apt-2204-v3-${{ hashFiles('/etc/apt/sources.list') }}
           restore-keys: |
-            ${{ runner.os }}-apt-2404-v2-
+            ${{ runner.os }}-apt-2204-v3-
+
+      - name: Restore systemd-ukify from cache
+        uses: actions/cache@v4
+        with:
+          path: /usr/bin/systemd-ukify
+          key: ${{ runner.os }}-systemd-ukify-v255
 
       - name: Checkout Armbian
         uses: actions/checkout@v4
