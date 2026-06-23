@@ -25,7 +25,7 @@ permissions:
 jobs:
   prepare:
     name: Prepare
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04  # 核心修复：升级到24.04
     outputs:
       env: ${{ steps.get.outputs.env }}
       tag: ${{ steps.get.outputs.tag }}
@@ -67,7 +67,7 @@ jobs:
   build-debs:
     name: Build Kernel
     needs: prepare
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04  # 核心修复：升级到24.04
     strategy:
       matrix:
         BRANCH: [current]
@@ -75,33 +75,36 @@ jobs:
       - name: Import env
         run: echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >> $GITHUB_ENV
 
-      - name: GitHub Actions专属apt极速优化（核心修复）
+      - name: GitHub Actions 24.04专属apt极速优化
         run: |
           # 1. 清理所有apt锁和缓存
           sudo rm -rf /var/lib/apt/lists/* /var/lib/dpkg/lock* /var/cache/apt/archives/*
           sudo dpkg --configure -a
           
-          # 2. 恢复Azure本地源（GitHub Runner最快源，实测80MB/s+）
+          # 2. 使用Azure本地源（同机房，速度80-100MB/s）
           sudo sed -i 's/archive.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list
           sudo sed -i 's/security.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list
           
-          # 3. 禁用IPv6（Azure IPv6不稳定，大幅减少超时）
+          # 3. 启用所有必要仓库
+          sudo add-apt-repository -y universe
+          sudo add-apt-repository -y multiverse
+          
+          # 4. 强制IPv4+多线程下载
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
-          
-          # 4. 开启apt多线程下载（最多16线程）
           echo 'Acquire::http::Pipeline-Depth "16";' | sudo tee /etc/apt/apt.conf.d/99pipeline
-          echo 'Acquire::http::Max-Age "3600";' | sudo tee /etc/apt/apt.conf.d/99maxage
           
-          # 5. 预更新源（修复依赖索引）
+          # 5. 预更新源
           sudo apt clean
           sudo apt update --fix-missing -y
           
-          # 6. 预安装Armbian核心依赖（减少脚本内部apt调用）
+          # 6. 预安装Armbian完整依赖（包含缺失的两个包）
           sudo apt install -y --no-install-recommends \
-            build-essential git curl wget unzip zip xz-utils \
-            libssl-dev libelf-dev bc bison flex python3 python3-pip \
-            device-tree-compiler gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
-            qemu-user-static debootstrap binfmt-support
+            colorized-logs axel rdfind binwalk libgnutls28-dev python2 python2-dev \
+            libc6-amd64-cross python3-pyelftools python3-libfdt systemd-ukify \
+            build-essential git curl wget unzip zip xz-utils libssl-dev libelf-dev \
+            bc bison flex python3 python3-pip device-tree-compiler \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf qemu-user-static \
+            debootstrap binfmt-support img2simg
           
           # 7. 释放磁盘空间
           sudo apt autoremove -y --purge
@@ -111,9 +114,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-${{ hashFiles('/etc/apt/sources.list') }}
+          key: ${{ runner.os }}-apt-2404-${{ hashFiles('/etc/apt/sources.list') }}
           restore-keys: |
-            ${{ runner.os }}-apt-
+            ${{ runner.os }}-apt-2404-
 
       - name: Checkout Armbian
         uses: actions/checkout@v4
@@ -153,8 +156,8 @@ jobs:
           mkdir -p .ccache
           sudo --preserve-env ./compile.sh kernel \
             ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} \
-            EXPERT=yes USE_CCACHE=yes CCACHE_DIR=$(pwd)/.ccache SKIP_INIT_BINFMTS=yes \
-            SKIP_APT_UPDATE=yes  # 跳过脚本内部的apt update（我们已经预更新过）
+            EXPERT=yes USE_CCACHE=yes CCACHE_DIR=$(pwd)/.ccache \
+            SKIP_INIT_BINFMTS=yes SKIP_APT_UPDATE=yes  # 跳过内部apt更新
           sudo chown $(id -u):$(id -g) -R output/
           sudo chown $(id -u):$(id -g) -R .ccache
 
@@ -168,7 +171,7 @@ jobs:
   build:
     name: Build ${{ matrix.RELEASE }}-${{ matrix.TYPE }}
     needs: [ prepare, build-debs ]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04  # 核心修复：升级到24.04
     strategy:
       fail-fast: false
       matrix:
@@ -179,12 +182,14 @@ jobs:
       - name: Import env
         run: echo "$(echo "${{ needs.prepare.outputs.env }}" | base64 -d)" >> $GITHUB_ENV
 
-      - name: GitHub Actions专属apt极速优化
+      - name: GitHub Actions 24.04专属apt极速优化
         run: |
           sudo rm -rf /var/lib/apt/lists/* /var/lib/dpkg/lock* /var/cache/apt/archives/*
           sudo dpkg --configure -a
           sudo sed -i 's/archive.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list
           sudo sed -i 's/security.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list
+          sudo add-apt-repository -y universe
+          sudo add-apt-repository -y multiverse
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
           echo 'Acquire::http::Pipeline-Depth "16";' | sudo tee /etc/apt/apt.conf.d/99pipeline
           sudo apt clean
@@ -196,9 +201,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-${{ hashFiles('/etc/apt/sources.list') }}
+          key: ${{ runner.os }}-apt-2404-${{ hashFiles('/etc/apt/sources.list') }}
           restore-keys: |
-            ${{ runner.os }}-apt-
+            ${{ runner.os }}-apt-2404-
 
       - name: Checkout Armbian
         uses: actions/checkout@v4
@@ -244,7 +249,7 @@ jobs:
       - name: Post Process & Rename
         id: postprocess
         run: |
-          sudo apt install -y img2simg
+          # 24.04已预安装img2simg，无需再apt安装
           curl -L -o ./AmlImg https://github.com/hzyitc/AmlImg/releases/download/v0.3.1/AmlImg_v0.3.1_linux_amd64 && chmod +x ./AmlImg
           
           DEB_FILE=$(ls output/debs/linux-image-*__*.deb 2>/dev/null | head -n 1)
