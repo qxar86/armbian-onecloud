@@ -192,17 +192,37 @@ jobs:
           name: debs-${{ matrix.BRANCH }}
           path: output/debs/
 
-      - name: Check Docker
-        run: docker --version
+      - name: Install host dependencies
+        run: |
+          set -euo pipefail
+          sudo apt update
+          sudo apt install -y \
+            qemu-user-static \
+            binfmt-support \
+            arch-test \
+            debootstrap \
+            systemd-container \
+            ubuntu-keyring \
+            ca-certificates
+
+      - name: Enable binfmt
+        run: |
+          set -euo pipefail
+          sudo update-binfmts --enable qemu-arm || true
+          sudo update-binfmts --enable qemu-aarch64 || true
+          sudo update-binfmts --display qemu-arm
+          sudo update-binfmts --display qemu-aarch64
+          arch-test armhf
+          arch-test arm64
 
       - name: Build OS Image
         run: |
           set -euo pipefail
           export GITHUB_ACTIONS=false
           ./compile.sh build \
-            ALLOW_ROOT=yes BOARD=onecloud BRANCH=${{ matrix.BRANCH }} RELEASE=${{ matrix.RELEASE }} \
+            ALLOW_ROOT=yes PREFER_DOCKER=no BOARD=onecloud BRANCH=${{ matrix.BRANCH }} RELEASE=${{ matrix.RELEASE }} \
             KERNEL_CONFIGURE=no EXPERT=yes SKIP_EXTERNAL_TOOLCHAINS=yes USE_CCACHE=no \
-            SKIP_INIT_BINFMTS=yes \
+            SKIP_INIT_BINFMTS=no \
             BUILD_MINIMAL=${{ matrix.TYPE == 'minimal' && 'yes' || 'no' }} \
             BUILD_DESKTOP=no COMPRESS_OUTPUTIMAGE=img
           sudo chown "$(id -u):$(id -g)" -R output/
